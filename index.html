@@ -15,7 +15,7 @@
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
 
-    /* Hide Secret Q/A by default; we'll show it in JS when appropriate */
+    /* Hide Secret Q/A by default; JS will show it when appropriate */
     #qa_section { display: none; }
   </style>
 </head>
@@ -24,7 +24,7 @@
   <div class="card">
     <div class="muted" id="intro">Select a secret question and set a new password.</div>
 
-    <!-- Secret Q/A (revealed only for first-time setup or if profile has no Secret Answer) -->
+    <!-- Secret Q/A (shown only for first-time setup) -->
     <div id="qa_section">
       <label for="question">Secret question</label>
       <select id="question">
@@ -67,7 +67,7 @@
   <script>
     // ── REPLACE WITH YOUR PROJECT VALUES ─────────────────────────────
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
+    const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
     // ─────────────────────────────────────────────────────────────────
 
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -78,7 +78,7 @@
       return {
         access_token: p.get("access_token"),
         refresh_token: p.get("refresh_token"),
-        type: (p.get("type") || "").toLowerCase() // 'signup' | 'invite' | 'recovery' | ...
+        type: (p.get("type") || "").toLowerCase()  // 'signup' | 'invite' | 'magiclink' | 'recovery' | ...
       };
     }
 
@@ -115,58 +115,61 @@
       const apply = document.getElementById("apply");
       const qa    = document.getElementById("qa_section");
 
-      const { type } = parseHash();
-
-      // Default: reset copy; we'll adjust after we inspect the profile
-      let showQA = false;
-
-      // Ensure session from email link
-      const rec = await ensureSessionFromLink();
-      if (!rec.ok) {
+      // 1) Create session from the email link
+      const sess = await ensureSessionFromLink();
+      if (!sess.ok) {
         msg.className = "err";
         msg.textContent = "Invalid or expired link. Please request a new email.";
         apply.disabled = true;
         return;
       }
 
-      // Fetch profile to see if Secret Answer exists
       const { data: { session } } = await client.auth.getSession();
       const userId = session.user.id;
 
-      let hasSecretAnswer = true;
-      try {
-        const prof = await client.from("user_profile")
-          .select('"Secret Answer"')  // quoted column name as per your schema
-          .eq("user_id", userId)
-          .single();
-        if (prof.error) throw prof.error;
-        const val = prof.data ? (prof.data["Secret Answer"] || "") : "";
-        hasSecretAnswer = !!(val && String(val).trim());
-      } catch(e) {
-        // If profile lookup fails, fail safe: require QA for first-time only
-        hasSecretAnswer = true;
+      // 2) Decide when to show Q/A
+      const { type } = parseHash();
+      const typeIsSetup = (type === "signup" || type === "invite" || type === "magiclink");
+      const typeIsReset = (type === "recovery");
+
+      let showQA = false;
+      if (typeIsReset) {
+        showQA = false; // never show Q/A for password reset
+      } else if (typeIsSetup) {
+        showQA = true;  // always show Q/A for first-time setup links
+      } else {
+        // Fallback: no/unknown type -> check profile
+        try {
+          const prof = await client
+            .from("user_profile")
+            .select('"Secret Answer", initial_login')
+            .eq("user_id", userId)
+            .single();
+          if (!prof.error) {
+            const ans = (prof.data && (prof.data["Secret Answer"] || "")).trim();
+            const init = (prof.data && (prof.data.initial_login || "")).toLowerCase();
+            showQA = (!ans || init === "no");
+          } else {
+            // if we can't read the profile, default to showing Q/A for safety
+            showQA = true;
+          }
+        } catch {
+          showQA = true;
+        }
       }
 
-      // Decide when to show Q/A:
-      // - Always for first-time setup links (signup or invite)
-      // - Otherwise only if profile has no Secret Answer yet
-      if (type === "signup" || type === "invite" || !hasSecretAnswer) {
-        showQA = true;
-      }
-      // But never show Q/A for password reset
-      if (type === "recovery") showQA = false;
-
-      // Apply UI text + visibility
+      // 3) Apply UI text + visibility
       if (showQA) {
         document.getElementById("title").textContent = "Finish account setup";
         document.getElementById("intro").textContent = "Select a secret question and set a new password.";
-        if (qa) qa.style.display = "";
+        qa.style.display = "";
       } else {
         document.getElementById("title").textContent = "Reset your password";
         document.getElementById("intro").textContent = "Enter and confirm your new password.";
-        if (qa) qa.style.display = "none";
+        qa.style.display = "none";
       }
 
+      // 4) Save handler
       apply.onclick = async () => {
         msg.className = "muted";
         msg.textContent = "Saving…";
@@ -186,7 +189,7 @@
         if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
 
         // 2) If showing Q/A, require and save it
-        if (showQA && qa && qa.style.display !== "none") {
+        if (showQA) {
           const q  = document.getElementById("question").value;
           const a  = document.getElementById("answer").value.trim();
           if (!a) {
