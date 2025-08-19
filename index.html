@@ -2,105 +2,175 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Reset Password</title>
+  <title>Account Setup / Reset</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; }
-    .card { max-width: 440px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 10px; }
-    input, button { width: 100%; padding: .7rem; margin: .35rem 0; }
-    .ok { color: #16a34a; }
-    .err { color: #dc2626; }
-    .muted { color: #6b7280; font-size: .9rem; }
+    .card { max-width: 520px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
+    input, select, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; }
+    label { font-size: .95rem; font-weight: 600; margin-top: .25rem; display: block; }
+    .row { display: flex; align-items: center; gap: .5rem; }
+    .ok { color: #16a34a; margin-top: .4rem; }
+    .err { color: #dc2626; margin-top: .4rem; }
+    .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
+    .small { font-size: .85rem; color: #6b7280; }
   </style>
 </head>
 <body>
-  <h2>Set a new password</h2>
+  <h2 id="title">Finish account setup</h2>
   <div class="card">
-    <p class="muted">Enter a new password for your account.</p>
-    <input id="pw" type="password" placeholder="New password" />
-    <input id="pw2" type="password" placeholder="Confirm new password" />
-    <button id="set">Update password</button>
+    <div class="muted" id="intro">Select a secret question and set a new password.</div>
+
+    <label for="question">Secret question</label>
+    <select id="question">
+      <option>What is your pet's name?</option>
+      <option>What is your mother's maiden name?</option>
+      <option>What is your favorite color?</option>
+      <option>What was the name of your first school?</option>
+      <option>In what city were you born?</option>
+      <option>What was the model of your first car?</option>
+      <option>What is your favorite movie?</option>
+    </select>
+
+    <label for="answer">Secret answer</label>
+    <div class="row">
+      <input id="answer" type="password" placeholder="Your answer" />
+      <input id="showAnswer" type="checkbox" />
+      <span class="small">Show</span>
+    </div>
+
+    <label for="pw">New password <span class="small">(minimum 6 characters)</span></label>
+    <div class="row">
+      <input id="pw" type="password" placeholder="New password" />
+      <input id="showPw" type="checkbox" />
+      <span class="small">Show</span>
+    </div>
+
+    <label for="pw2">Confirm new password</label>
+    <div class="row">
+      <input id="pw2" type="password" placeholder="Confirm new password" />
+      <input id="showPw2" type="checkbox" />
+      <span class="small">Show</span>
+    </div>
+
+    <button id="apply">Save</button>
     <div id="msg" class="muted"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    // TODO: replace these two with your actual project values
+    // ── REPLACE WITH YOUR PROJECT VALUES ─────────────────────────────
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds"
-;
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
+    // ─────────────────────────────────────────────────────────────────
 
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // 1) Parse recovery tokens from URL fragment (#access_token=...&...)
-    // Supabase sends a link like: https://site/#access_token=...&refresh_token=...&type=recovery
+    // Parse access/refresh tokens from URL hash
     function parseHash() {
-      const h = window.location.hash;
-      const params = new URLSearchParams(h.startsWith("#") ? h.slice(1) : h);
+      const h = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+      const p = new URLSearchParams(h);
       return {
-        access_token: params.get("access_token"),
-        refresh_token: params.get("refresh_token"),
-        type: params.get("type"),
+        access_token: p.get("access_token"),
+        refresh_token: p.get("refresh_token"),
+        type: p.get("type") // 'signup' or 'recovery'
       };
     }
 
-    async function ensureRecoverySession() {
-      const { access_token, refresh_token, type } = parseHash();
+    async function ensureSessionFromLink() {
+      const { access_token, refresh_token } = parseHash();
       if (access_token && refresh_token) {
-        // Set the session from the tokens in the URL
         const { error } = await client.auth.setSession({ access_token, refresh_token });
-        if (error) return { ok: false, error };
-        return { ok: true };
+        if (error) return { ok:false, error };
+        return { ok:true };
       }
-      // Try to get existing session (in case browser cached it)
       const { data, error } = await client.auth.getSession();
-      if (error || !data.session) return { ok: false, error: error || new Error("No recovery session found") };
-      return { ok: true };
+      if (error || !data.session) return { ok:false, error: error || new Error("No session") };
+      return { ok:true };
+    }
+
+    // hash secret answer (SHA-256 → hex)
+    async function sha256Hex(text) {
+      const enc = new TextEncoder().encode(text);
+      const buf = await crypto.subtle.digest("SHA-256", enc);
+      return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    }
+
+    // Toggle show/hide inputs
+    function bindShow(idInput, idCheck) {
+      const el = document.getElementById(idInput);
+      document.getElementById(idCheck).onchange = (e)=> el.type = e.target.checked ? "text" : "password";
     }
 
     async function main() {
-      const msg = document.getElementById("msg");
-      const btn = document.getElementById("set");
-      const pw  = document.getElementById("pw");
-      const pw2 = document.getElementById("pw2");
+      bindShow("answer","showAnswer");
+      bindShow("pw","showPw");
+      bindShow("pw2","showPw2");
 
-      // Establish a recovery session from the link
-      const rec = await ensureRecoverySession();
-      if (!rec.ok) {
+      const msg = document.getElementById("msg");
+      const apply = document.getElementById("apply");
+      const type = parseHash().type;
+
+      // adjust title/intro by type
+      document.getElementById("title").textContent =
+        type === "recovery" ? "Reset your password" : "Finish account setup";
+      document.getElementById("intro").textContent =
+        type === "recovery"
+          ? "Enter a new password. (Secret Q/A is optional if you already set it.)"
+          : "Select a secret question and set a new password.";
+
+      const sess = await ensureSessionFromLink();
+      if (!sess.ok) {
         msg.className = "err";
-        msg.textContent = "Invalid or expired recovery link. Please request a new reset email.";
-        btn.disabled = true;
+        msg.textContent = "Invalid or expired link. Request a new email.";
+        apply.disabled = true;
         return;
       }
 
-      btn.onclick = async () => {
+      const { data: { session } } = await client.auth.getSession();
+      const userId = session.user.id;
+
+      apply.onclick = async () => {
         msg.className = "muted";
-        msg.textContent = "Updating…";
-        const v1 = pw.value.trim();
-        const v2 = pw2.value.trim();
-        if (!v1 || v1 !== v2) {
-          msg.className = "err";
-          msg.textContent = "Passwords do not match.";
-          return;
+        msg.textContent = "Saving…";
+
+        const q  = document.getElementById("question").value;
+        const a  = document.getElementById("answer").value.trim();
+        const pw = document.getElementById("pw").value.trim();
+        const p2 = document.getElementById("pw2").value.trim();
+
+        // Password validation (required for both signup & recovery)
+        if (!pw || pw.length < 6) {
+          msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return;
         }
-        // Optional: enforce a stronger policy
-        if (v1.length < 6) {
-          msg.className = "err";
-          msg.textContent = "Password must be at least 6 characters.";
-          return;
+        if (pw !== p2) {
+          msg.className = "err"; msg.textContent = "Passwords do not match."; return;
         }
-        const { error } = await client.auth.updateUser({ password: v1 });
-        if (error) {
-          msg.className = "err";
-          msg.textContent = "Error: " + error.message;
-          return;
+
+        // 1) Update Auth password
+        const { error: pwErr } = await client.auth.updateUser({ password: pw });
+        if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
+
+        // 2) Optionally update secret Q/A in profile (if an answer was provided OR on first setup)
+        try {
+          if (a) {
+            const hashed = await sha256Hex(a);
+            const upd = await client
+              .from("user_profile")
+              .update({ "Secret Question": q, "Secret Answer": hashed, "initial_login": "Yes" })
+              .eq("user_id", userId);
+            if (upd.error) { throw upd.error; }
+          }
+        } catch (e) {
+          // Don’t block a successful password update if profile write fails
+          console.warn("Profile update failed:", e);
         }
+
         msg.className = "ok";
-        msg.textContent = "Password updated. You can close this tab and sign in with your new password.";
+        msg.textContent = "Saved. You can close this tab and sign in with your new password.";
       };
     }
     main();
   </script>
 </body>
 </html>
-
