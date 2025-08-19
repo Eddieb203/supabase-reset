@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Reset Password</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; }
+    .card { max-width: 440px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 10px; }
+    input, button { width: 100%; padding: .7rem; margin: .35rem 0; }
+    .ok { color: #16a34a; }
+    .err { color: #dc2626; }
+    .muted { color: #6b7280; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <h2>Set a new password</h2>
+  <div class="card">
+    <p class="muted">Enter a new password for your account.</p>
+    <input id="pw" type="password" placeholder="New password" />
+    <input id="pw2" type="password" placeholder="Confirm new password" />
+    <button id="set">Update password</button>
+    <div id="msg" class="muted"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // TODO: replace these two with your actual project values
+    const SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
+    const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // 1) Parse recovery tokens from URL fragment (#access_token=...&...)
+    // Supabase sends a link like: https://site/#access_token=...&refresh_token=...&type=recovery
+    function parseHash() {
+      const h = window.location.hash;
+      const params = new URLSearchParams(h.startsWith("#") ? h.slice(1) : h);
+      return {
+        access_token: params.get("access_token"),
+        refresh_token: params.get("refresh_token"),
+        type: params.get("type"),
+      };
+    }
+
+    async function ensureRecoverySession() {
+      const { access_token, refresh_token, type } = parseHash();
+      if (access_token && refresh_token) {
+        // Set the session from the tokens in the URL
+        const { error } = await client.auth.setSession({ access_token, refresh_token });
+        if (error) return { ok: false, error };
+        return { ok: true };
+      }
+      // Try to get existing session (in case browser cached it)
+      const { data, error } = await client.auth.getSession();
+      if (error || !data.session) return { ok: false, error: error || new Error("No recovery session found") };
+      return { ok: true };
+    }
+
+    async function main() {
+      const msg = document.getElementById("msg");
+      const btn = document.getElementById("set");
+      const pw  = document.getElementById("pw");
+      const pw2 = document.getElementById("pw2");
+
+      // Establish a recovery session from the link
+      const rec = await ensureRecoverySession();
+      if (!rec.ok) {
+        msg.className = "err";
+        msg.textContent = "Invalid or expired recovery link. Please request a new reset email.";
+        btn.disabled = true;
+        return;
+      }
+
+      btn.onclick = async () => {
+        msg.className = "muted";
+        msg.textContent = "Updating…";
+        const v1 = pw.value.trim();
+        const v2 = pw2.value.trim();
+        if (!v1 || v1 !== v2) {
+          msg.className = "err";
+          msg.textContent = "Passwords do not match.";
+          return;
+        }
+        // Optional: enforce a stronger policy
+        if (v1.length < 6) {
+          msg.className = "err";
+          msg.textContent = "Password must be at least 6 characters.";
+          return;
+        }
+        const { error } = await client.auth.updateUser({ password: v1 });
+        if (error) {
+          msg.className = "err";
+          msg.textContent = "Error: " + error.message;
+          return;
+        }
+        msg.className = "ok";
+        msg.textContent = "Password updated. You can close this tab and sign in with your new password.";
+      };
+    }
+    main();
+  </script>
+</body>
+</html>
