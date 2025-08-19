@@ -15,7 +15,7 @@
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
 
-    /* Hide Secret Q/A by default; show only for first-time setup (type=signup) */
+    /* Hide Secret Q/A by default; we'll show it in JS when appropriate */
     #qa_section { display: none; }
   </style>
 </head>
@@ -24,7 +24,7 @@
   <div class="card">
     <div class="muted" id="intro">Select a secret question and set a new password.</div>
 
-    <!-- Secret Q/A is inside qa_section so it's hidden by default and shown only for signup -->
+    <!-- Secret Q/A (revealed only for first-time setup or if profile has no Secret Answer) -->
     <div id="qa_section">
       <label for="question">Secret question</label>
       <select id="question">
@@ -78,7 +78,7 @@
       return {
         access_token: p.get("access_token"),
         refresh_token: p.get("refresh_token"),
-        type: p.get("type") // 'signup' or 'recovery'
+        type: (p.get("type") || "").toLowerCase() // 'signup' | 'invite' | 'recovery' | ...
       };
     }
 
@@ -115,20 +115,12 @@
       const apply = document.getElementById("apply");
       const qa    = document.getElementById("qa_section");
 
-      const params = new URLSearchParams(location.hash.slice(1));
-      const type = params.get("type"); // 'signup' or 'recovery'
+      const { type } = parseHash();
 
-      // Show Q/A ONLY for first-time setup (signup). For reset, leave it hidden.
-      if (type === "signup") {
-        document.getElementById("title").textContent = "Finish account setup";
-        document.getElementById("intro").textContent = "Select a secret question and set a new password.";
-        if (qa) qa.style.display = "";   // reveal Q/A
-      } else {
-        document.getElementById("title").textContent = "Reset your password";
-        document.getElementById("intro").textContent = "Enter and confirm your new password.";
-        // qa stays hidden due to CSS #qa_section { display: none; }
-      }
+      // Default: reset copy; we'll adjust after we inspect the profile
+      let showQA = false;
 
+      // Ensure session from email link
       const rec = await ensureSessionFromLink();
       if (!rec.ok) {
         msg.className = "err";
@@ -137,8 +129,43 @@
         return;
       }
 
+      // Fetch profile to see if Secret Answer exists
       const { data: { session } } = await client.auth.getSession();
       const userId = session.user.id;
+
+      let hasSecretAnswer = true;
+      try {
+        const prof = await client.from("user_profile")
+          .select('"Secret Answer"')  // quoted column name as per your schema
+          .eq("user_id", userId)
+          .single();
+        if (prof.error) throw prof.error;
+        const val = prof.data ? (prof.data["Secret Answer"] || "") : "";
+        hasSecretAnswer = !!(val && String(val).trim());
+      } catch(e) {
+        // If profile lookup fails, fail safe: require QA for first-time only
+        hasSecretAnswer = true;
+      }
+
+      // Decide when to show Q/A:
+      // - Always for first-time setup links (signup or invite)
+      // - Otherwise only if profile has no Secret Answer yet
+      if (type === "signup" || type === "invite" || !hasSecretAnswer) {
+        showQA = true;
+      }
+      // But never show Q/A for password reset
+      if (type === "recovery") showQA = false;
+
+      // Apply UI text + visibility
+      if (showQA) {
+        document.getElementById("title").textContent = "Finish account setup";
+        document.getElementById("intro").textContent = "Select a secret question and set a new password.";
+        if (qa) qa.style.display = "";
+      } else {
+        document.getElementById("title").textContent = "Reset your password";
+        document.getElementById("intro").textContent = "Enter and confirm your new password.";
+        if (qa) qa.style.display = "none";
+      }
 
       apply.onclick = async () => {
         msg.className = "muted";
@@ -158,8 +185,8 @@
         const { error: pwErr } = await client.auth.updateUser({ password: pw });
         if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
 
-        // 2) Only on first-time setup (signup) update secret Q/A
-        if (type === "signup" && qa && qa.style.display !== "none") {
+        // 2) If showing Q/A, require and save it
+        if (showQA && qa && qa.style.display !== "none") {
           const q  = document.getElementById("question").value;
           const a  = document.getElementById("answer").value.trim();
           if (!a) {
@@ -172,8 +199,8 @@
               .eq("user_id", userId);
             if (upd.error) throw upd.error;
           } catch (e) {
-            console.warn("Profile update failed:", e);
-            msg.className = "err"; msg.textContent = "Profile update error: " + (e.message || e);
+            msg.className = "err";
+            msg.textContent = "Profile update error: " + (e.message || e);
             return;
           }
         }
