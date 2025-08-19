@@ -21,22 +21,25 @@
   <div class="card">
     <div class="muted" id="intro">Select a secret question and set a new password.</div>
 
-    <label for="question">Secret question</label>
-    <select id="question">
-      <option>What is your pet's name?</option>
-      <option>What is your mother's maiden name?</option>
-      <option>What is your favorite color?</option>
-      <option>What was the name of your first school?</option>
-      <option>In what city were you born?</option>
-      <option>What was the model of your first car?</option>
-      <option>What is your favorite movie?</option>
-    </select>
+    <!-- Secret Q/A is inside qa_section so we can hide it for password reset -->
+    <div id="qa_section">
+      <label for="question">Secret question</label>
+      <select id="question">
+        <option>What is your pet's name?</option>
+        <option>What is your mother's maiden name?</option>
+        <option>What is your favorite color?</option>
+        <option>What was the name of your first school?</option>
+        <option>In what city were you born?</option>
+        <option>What was the model of your first car?</option>
+        <option>What is your favorite movie?</option>
+      </select>
 
-    <label for="answer">Secret answer</label>
-    <div class="row">
-      <input id="answer" type="password" placeholder="Your answer" />
-      <input id="showAnswer" type="checkbox" />
-      <span class="small">Show</span>
+      <label for="answer">Secret answer</label>
+      <div class="row">
+        <input id="answer" type="password" placeholder="Your answer" />
+        <input id="showAnswer" type="checkbox" />
+        <span class="small">Show</span>
+      </div>
     </div>
 
     <label for="pw">New password <span class="small">(minimum 6 characters)</span></label>
@@ -99,7 +102,8 @@
     // Toggle show/hide inputs
     function bindShow(idInput, idCheck) {
       const el = document.getElementById(idInput);
-      document.getElementById(idCheck).onchange = (e)=> el.type = e.target.checked ? "text" : "password";
+      const box = document.getElementById(idCheck);
+      if (el && box) box.onchange = (e)=> el.type = e.target.checked ? "text" : "password";
     }
 
     async function main() {
@@ -107,22 +111,29 @@
       bindShow("pw","showPw");
       bindShow("pw2","showPw2");
 
-      const msg = document.getElementById("msg");
+      const msg   = document.getElementById("msg");
       const apply = document.getElementById("apply");
-      const type = parseHash().type;
+      const qa    = document.getElementById("qa_section");
 
-      // adjust title/intro by type
-      document.getElementById("title").textContent =
-        type === "recovery" ? "Reset your password" : "Finish account setup";
-      document.getElementById("intro").textContent =
-        type === "recovery"
-          ? "Enter a new password. (Secret Q/A is optional if you already set it.)"
-          : "Select a secret question and set a new password.";
+      const params = new URLSearchParams(location.hash.slice(1));
+      const type = params.get("type"); // 'signup' or 'recovery'
 
-      const sess = await ensureSessionFromLink();
-      if (!sess.ok) {
+      // Title/intro and show/hide Q/A
+      if (type === "recovery") {
+        document.getElementById("title").textContent = "Reset your password";
+        document.getElementById("intro").textContent = "Enter and confirm your new password.";
+        if (qa) qa.style.display = "none";          // hide secret Q/A for reset
+      } else {
+        document.getElementById("title").textContent = "Finish account setup";
+        document.getElementById("intro").textContent = "Select a secret question and set a new password.";
+        if (qa) qa.style.display = "";              // show Q/A for first-time setup
+      }
+
+      // Ensure session from email link
+      const rec = await ensureSessionFromLink();
+      if (!rec.ok) {
         msg.className = "err";
-        msg.textContent = "Invalid or expired link. Request a new email.";
+        msg.textContent = "Invalid or expired link. Please request a new email.";
         apply.disabled = true;
         return;
       }
@@ -134,12 +145,10 @@
         msg.className = "muted";
         msg.textContent = "Saving…";
 
-        const q  = document.getElementById("question").value;
-        const a  = document.getElementById("answer").value.trim();
-        const pw = document.getElementById("pw").value.trim();
-        const p2 = document.getElementById("pw2").value.trim();
+        const pw  = document.getElementById("pw").value.trim();
+        const p2  = document.getElementById("pw2").value.trim();
 
-        // Password validation (required for both signup & recovery)
+        // Password validation (always required)
         if (!pw || pw.length < 6) {
           msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return;
         }
@@ -151,25 +160,31 @@
         const { error: pwErr } = await client.auth.updateUser({ password: pw });
         if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
 
-        // 2) Optionally update secret Q/A in profile (if an answer was provided OR on first setup)
-        try {
-          if (a) {
+        // 2) Only on first-time setup (signup) update secret Q/A
+        if (type === "signup" && qa && qa.style.display !== "none") {
+          const q  = document.getElementById("question").value;
+          const a  = document.getElementById("answer").value.trim();
+          if (!a) {
+            msg.className = "err"; msg.textContent = "Please enter your secret answer."; return;
+          }
+          try {
             const hashed = await sha256Hex(a);
-            const upd = await client
-              .from("user_profile")
+            const upd = await client.from("user_profile")
               .update({ "Secret Question": q, "Secret Answer": hashed, "initial_login": "Yes" })
               .eq("user_id", userId);
-            if (upd.error) { throw upd.error; }
+            if (upd.error) throw upd.error;
+          } catch (e) {
+            console.warn("Profile update failed:", e);
+            msg.className = "err"; msg.textContent = "Profile update error: " + (e.message || e);
+            return;
           }
-        } catch (e) {
-          // Don’t block a successful password update if profile write fails
-          console.warn("Profile update failed:", e);
         }
 
         msg.className = "ok";
         msg.textContent = "Saved. You can close this tab and sign in with your new password.";
       };
     }
+
     main();
   </script>
 </body>
