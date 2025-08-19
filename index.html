@@ -14,6 +14,9 @@
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
+
+    /* Hide Secret Q/A by default; show only for first-time setup (type=signup) */
+    #qa_section { display: none; }
   </style>
 </head>
 <body>
@@ -21,7 +24,7 @@
   <div class="card">
     <div class="muted" id="intro">Select a secret question and set a new password.</div>
 
-    <!-- Secret Q/A is inside qa_section so we can hide it for password reset -->
+    <!-- Secret Q/A is inside qa_section so it's hidden by default and shown only for signup -->
     <div id="qa_section">
       <label for="question">Secret question</label>
       <select id="question">
@@ -69,7 +72,6 @@
 
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // Parse access/refresh tokens from URL hash
     function parseHash() {
       const h = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
       const p = new URLSearchParams(h);
@@ -92,14 +94,12 @@
       return { ok:true };
     }
 
-    // hash secret answer (SHA-256 → hex)
     async function sha256Hex(text) {
       const enc = new TextEncoder().encode(text);
       const buf = await crypto.subtle.digest("SHA-256", enc);
       return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
     }
 
-    // Toggle show/hide inputs
     function bindShow(idInput, idCheck) {
       const el = document.getElementById(idInput);
       const box = document.getElementById(idCheck);
@@ -118,18 +118,17 @@
       const params = new URLSearchParams(location.hash.slice(1));
       const type = params.get("type"); // 'signup' or 'recovery'
 
-      // Title/intro and show/hide Q/A
-      if (type === "recovery") {
-        document.getElementById("title").textContent = "Reset your password";
-        document.getElementById("intro").textContent = "Enter and confirm your new password.";
-        if (qa) qa.style.display = "none";          // hide secret Q/A for reset
-      } else {
+      // Show Q/A ONLY for first-time setup (signup). For reset, leave it hidden.
+      if (type === "signup") {
         document.getElementById("title").textContent = "Finish account setup";
         document.getElementById("intro").textContent = "Select a secret question and set a new password.";
-        if (qa) qa.style.display = "";              // show Q/A for first-time setup
+        if (qa) qa.style.display = "";   // reveal Q/A
+      } else {
+        document.getElementById("title").textContent = "Reset your password";
+        document.getElementById("intro").textContent = "Enter and confirm your new password.";
+        // qa stays hidden due to CSS #qa_section { display: none; }
       }
 
-      // Ensure session from email link
       const rec = await ensureSessionFromLink();
       if (!rec.ok) {
         msg.className = "err";
@@ -148,7 +147,6 @@
         const pw  = document.getElementById("pw").value.trim();
         const p2  = document.getElementById("pw2").value.trim();
 
-        // Password validation (always required)
         if (!pw || pw.length < 6) {
           msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return;
         }
