@@ -158,10 +158,12 @@
       // Always hide for password reset; otherwise show if setup link or profile says still needed
       const isReset = (type === "recovery");
       const isSetupLink = (type === "signup" || type === "invite" || type === "magiclink");
-      const showQA = !isReset && (isSetupLink || needsSetup);
-  
+      
+      // needsSetup takes precedence
+      const showQA = needsSetup ? true : (isReset ? false : isSetupLink);
+      
       console.log("[RESET PAGE] showQA =", showQA, " (isReset=",isReset,", isSetupLink=",isSetupLink,", needsSetup=",needsSetup,")");
-  
+      
       if (showQA) {
         document.getElementById("title").textContent = "Finish account setup";
         document.getElementById("intro").textContent = "Select a secret question and set a new password.";
@@ -218,6 +220,7 @@
   </script>
 </body>
 </html>
+
 
 
 
