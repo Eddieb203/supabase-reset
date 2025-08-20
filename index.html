@@ -1,1 +1,192 @@
-<!doctype html> <html> <head> <meta charset="utf-8" /> <title>Set Your Password</title> <meta name="viewport" content="width=device-width, initial-scale=1" /> <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" /> <meta http-equiv="Pragma" content="no-cache" /> <style> body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; } .card { max-width: 520px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; } input, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; } label { font-size: .95rem; font-weight: 600; margin-top: .25rem; display: block; } .row { display: flex; align-items: center; gap: .5rem; } .ok { color: #16a34a; margin-top: .4rem; } .err { color: #dc2626; margin-top: .4rem; } .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; } .small { font-size: .85rem; color: #6b7280; } </style> </head> <body> <h2 id="title">Set your password</h2> <div class="card"> <div class="muted" id="intro">Enter and confirm your new password (minimum 6 characters).</div> <label for="pw">New password <span class="small">(min 6)</span></label> <div class="row"> <input id="pw" type="password" placeholder="New password" /> <input id="showPw" type="checkbox" /> <span class="small">Show</span> </div> <label for="pw2">Confirm new password</label> <div class="row"> <input id="pw2" type="password" placeholder="Confirm new password" /> <input id="showPw2" type="checkbox" /> <span class="small">Show</span> </div> <button id="apply">Save</button> <div id="msg" class="muted"></div> </div> <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script> <script> // -- YOUR PROJECT VALUES -- const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co"; const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds" ; // ------------------------- const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); function parseHash() { const h = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash; const p = new URLSearchParams(h); return { access_token: p.get("access_token"), refresh_token: p.get("refresh_token") }; } // Require tokens in the link; do NOT reuse any existing session async function requireSessionFromLink() { const { access_token, refresh_token } = parseHash(); if (!access_token || !refresh_token) return { ok:false, error:new Error("No tokens in link") }; const { error } = await client.auth.setSession({ access_token, refresh_token }); return error ? { ok:false, error } : { ok:true }; } function bindShow(idInput, idCheck) { const el = document.getElementById(idInput); const box = document.getElementById(idCheck); if (el && box) box.onchange = (e)=> el.type = e.target.checked ? "text" : "password"; } async function main() { bindShow("pw","showPw"); bindShow("pw2","showPw2"); const msg = document.getElementById("msg"); const apply = document.getElementById("apply"); const sess = await requireSessionFromLink(); if (!sess.ok) { msg.className = "err"; msg.textContent = "Invalid or expired link. Please request a new email."; apply.disabled = true; return; } apply.onclick = async () => { msg.className = "muted"; msg.textContent = "Saving…"; const pw = document.getElementById("pw").value.trim(); const p2 = document.getElementById("pw2").value.trim(); if (!pw || pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; } if (pw !== p2) { msg.className = "err"; msg.textContent = "Passwords do not match."; return; } const { error } = await client.auth.updateUser({ password: pw }); if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; } msg.className = "ok"; msg.textContent = "Saved. You can close this tab and sign in with your new password."; }; } main(); </script> </body> </html>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Set Your Password</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; }
+    .card { max-width: 520px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
+    input, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; }
+    label { font-size: .95rem; font-weight: 600; margin-top: .25rem; display: block; }
+    .row { display: flex; align-items: center; gap: .5rem; }
+    .ok { color: #16a34a; margin-top: .4rem; }
+    .err { color: #dc2626; margin-top: .4rem; }
+    .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
+    .small { font-size: .85rem; color: #6b7280; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+    .hidden { display: none; }
+    hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h2 id="title">Set your password</h2>
+  <div class="card">
+    <div class="muted" id="intro">Enter and confirm your new password (minimum 6 characters).</div>
+
+    <label for="pw">New password <span class="small">(min 6)</span></label>
+    <div class="row">
+      <input id="pw" type="password" placeholder="New password" />
+      <input id="showPw" type="checkbox" />
+      <span class="small">Show</span>
+    </div>
+
+    <label for="pw2">Confirm new password</label>
+    <div class="row">
+      <input id="pw2" type="password" placeholder="Confirm new password" />
+      <input id="showPw2" type="checkbox" />
+      <span class="small">Show</span>
+    </div>
+
+    <button id="apply" disabled>Save</button>
+    <div id="msg" class="muted"></div>
+
+    <!-- Shown when link is invalid/expired -->
+    <div id="resend" class="hidden">
+      <hr />
+      <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+      <button id="send">Send reset link</button>
+      <div id="resendMsg" class="muted"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // -- Your project values --
+    const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // Use this exact page for future resets (safe with Outlook)
+    const REDIRECT_URL = window.location.origin + window.location.pathname;
+
+    // Helpers
+    const $ = (id) => document.getElementById(id);
+    function bindShow(inputId, checkId) {
+      const el = $(inputId), box = $(checkId);
+      if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
+    }
+    function showResend() { $("#resend").classList.remove("hidden"); }
+
+    // Unwrap common Outlook/Proofpoint safe-link wrappers (if our page was linked through them)
+    function effectiveUrl() {
+      const outer = new URL(window.location.href);
+      const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") || outer.searchParams.get("u") || outer.searchParams.get("redirect");
+      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; } catch { return outer; }
+    }
+    const eff = effectiveUrl();
+    const hash  = new URLSearchParams(eff.hash.startsWith("#") ? eff.hash.slice(1) : "");
+    const query = eff.searchParams;
+    const getParam = (k) => hash.get(k) ?? query.get(k);
+
+    // Show script errors on the page instead of “nothing happens”
+    window.addEventListener("error", (e) => {
+      const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
+    });
+
+    async function boot() {
+      bindShow("pw","showPw"); bindShow("pw2","showPw2");
+      $("#send").onclick = resend;                  // Resend handler (visible on failures)
+      $("#apply").onclick = updatePassword;        // Save handler (enabled only when session OK)
+
+      // Surface Auth errors from Supabase redirect (e.g., consumed/expired by Outlook scan)
+      const err = getParam("error") || getParam("error_code");
+      const errDesc = getParam("error_description");
+      if (err) {
+        $("#msg").className = "err";
+        $("#msg").textContent = errDesc || "Email link is invalid or has expired.";
+        showResend();
+        return;
+      }
+
+      // Try PKCE code first (newer flow)
+      const code = getParam("code");
+      if (code) {
+        const { error } = await client.auth.exchangeCodeForSession(code);
+        if (error) {
+          $("#msg").className = "err";
+          $("#msg").textContent = "Auth error: " + error.message;
+          showResend();
+          return;
+        }
+        return afterSessionReady();
+      }
+
+      // Fallback: legacy hash tokens
+      const at = getParam("access_token");
+      const rt = getParam("refresh_token");
+      if (at && rt) {
+        const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
+        if (error) {
+          $("#msg").className = "err";
+          $("#msg").textContent = "Auth error: " + error.message;
+          showResend();
+          return;
+        }
+        return afterSessionReady();
+      }
+
+      // Nothing usable (typical after Outlook pre-click)
+      $("#msg").className = "err";
+      $("#msg").textContent = "Invalid or expired link. Request a new one below.";
+      showResend();
+    }
+
+    async function afterSessionReady() {
+      const { data: { user } } = await client.auth.getUser();
+      if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
+      $("#apply").disabled = false;
+    }
+
+    async function updatePassword() {
+      const msg = $("#msg");
+      const btn = $("#apply");
+      btn.disabled = true;
+      msg.className = "muted";
+      msg.textContent = "Saving…";
+
+      // Guard: require a valid session (prevents silent failures)
+      const { data: { session } } = await client.auth.getSession();
+      if (!session?.access_token) {
+        msg.className = "err";
+        msg.textContent = "This page doesn't have a valid reset session. Please open the latest email link, or resend below.";
+        btn.disabled = false;
+        showResend();
+        return;
+      }
+
+      const pw = $("#pw").value.trim();
+      const p2 = $("#pw2").value.trim();
+      if (pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; btn.disabled = false; return; }
+      if (pw !== p2)     { msg.className = "err"; msg.textContent = "Passwords do not match."; btn.disabled = false; return; }
+
+      const { error } = await client.auth.updateUser({ password: pw });
+      if (error) {
+        msg.className = "err";
+        msg.textContent = "Auth error: " + error.message;
+        btn.disabled = false;
+        return;
+      }
+
+      await client.auth.signOut();
+      msg.className = "ok";
+      msg.textContent = "Saved. You can close this tab and sign in with your new password.";
+    }
+
+    async function resend() {
+      const out = $("#resendMsg");
+      const email = $("#email").value.trim();
+      if (!email) { out.className = "err"; out.textContent = "Enter your email address."; return; }
+      out.className = "muted"; out.textContent = "Sending…";
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: REDIRECT_URL });
+      if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
+      out.className = "ok"; out.textContent = "Sent. Check your inbox for a fresh link.";
+    }
+
+    boot();
+  </script>
+</body>
+</html>
