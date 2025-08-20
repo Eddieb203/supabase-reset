@@ -40,10 +40,9 @@
       <span class="small">Show</span>
     </div>
 
-    <button id="apply" disabled>Save</button>
+    <button id="apply">Save</button>
     <div id="msg" class="muted"></div>
 
-    <!-- Shown when link is invalid/expired -->
     <div id="resend" class="hidden">
       <hr />
       <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
@@ -60,7 +59,7 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // Use this exact page for future resets (safe with Outlook)
+    // Use this exact page for future resets (works with Outlook Safe Links)
     const REDIRECT_URL = window.location.origin + window.location.pathname;
 
     // Helpers
@@ -71,28 +70,31 @@
     }
     function showResend() { $("#resend").classList.remove("hidden"); }
 
-    // Unwrap common Outlook/Proofpoint safe-link wrappers (if our page was linked through them)
+    // Unwrap Outlook/Proofpoint safe-links (they wrap your URL inside ?url= or ?target=)
     function effectiveUrl() {
       const outer = new URL(window.location.href);
-      const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") || outer.searchParams.get("u") || outer.searchParams.get("redirect");
-      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; } catch { return outer; }
+      const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
+                      outer.searchParams.get("u")   || outer.searchParams.get("redirect");
+      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; }
+      catch { return outer; }
     }
     const eff = effectiveUrl();
     const hash  = new URLSearchParams(eff.hash.startsWith("#") ? eff.hash.slice(1) : "");
     const query = eff.searchParams;
     const getParam = (k) => hash.get(k) ?? query.get(k);
 
-    // Show script errors on the page instead of “nothing happens”
+    // Show script errors on the page (so issues aren't silent)
     window.addEventListener("error", (e) => {
       const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
     });
 
-    async function boot() {
-      bindShow("pw","showPw"); bindShow("pw2","showPw2");
-      $("#send").onclick = resend;                  // Resend handler (visible on failures)
-      $("#apply").onclick = updatePassword;        // Save handler (enabled only when session OK)
+    // Click handlers (Save is always clickable)
+    $("#apply").onclick = updatePassword;
+    $("#send").onclick  = resend;
+    bindShow("pw","showPw"); bindShow("pw2","showPw2");
 
-      // Surface Auth errors from Supabase redirect (e.g., consumed/expired by Outlook scan)
+    // Try to create a session from the URL tokens
+    (async function boot() {
       const err = getParam("error") || getParam("error_code");
       const errDesc = getParam("error_description");
       if (err) {
@@ -102,7 +104,7 @@
         return;
       }
 
-      // Try PKCE code first (newer flow)
+      // Prefer PKCE code flow
       const code = getParam("code");
       if (code) {
         const { error } = await client.auth.exchangeCodeForSession(code);
@@ -112,34 +114,25 @@
           showResend();
           return;
         }
-        return afterSessionReady();
-      }
-
-      // Fallback: legacy hash tokens
-      const at = getParam("access_token");
-      const rt = getParam("refresh_token");
-      if (at && rt) {
-        const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
-        if (error) {
-          $("#msg").className = "err";
-          $("#msg").textContent = "Auth error: " + error.message;
-          showResend();
-          return;
+      } else {
+        // Fallback: legacy hash tokens
+        const at = getParam("access_token");
+        const rt = getParam("refresh_token");
+        if (at && rt) {
+          const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
+          if (error) {
+            $("#msg").className = "err";
+            $("#msg").textContent = "Auth error: " + error.message;
+            showResend();
+            return;
+          }
         }
-        return afterSessionReady();
       }
 
-      // Nothing usable (typical after Outlook pre-click)
-      $("#msg").className = "err";
-      $("#msg").textContent = "Invalid or expired link. Request a new one below.";
-      showResend();
-    }
-
-    async function afterSessionReady() {
+      // Personalize if we have a user (nice-to-have; not required to click Save)
       const { data: { user } } = await client.auth.getUser();
       if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
-      $("#apply").disabled = false;
-    }
+    })();
 
     async function updatePassword() {
       const msg = $("#msg");
@@ -148,11 +141,11 @@
       msg.className = "muted";
       msg.textContent = "Saving…";
 
-      // Guard: require a valid session (prevents silent failures)
+      // Require a valid session (prevents silent failures)
       const { data: { session } } = await client.auth.getSession();
       if (!session?.access_token) {
         msg.className = "err";
-        msg.textContent = "This page doesn't have a valid reset session. Please open the latest email link, or resend below.";
+        msg.textContent = "This page doesn't have a valid reset session. Open the latest email link, or request a new one below.";
         btn.disabled = false;
         showResend();
         return;
@@ -185,8 +178,6 @@
       if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
       out.className = "ok"; out.textContent = "Sent. Check your inbox for a fresh link.";
     }
-
-    boot();
   </script>
 </body>
 </html>
