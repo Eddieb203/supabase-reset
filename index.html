@@ -65,32 +65,32 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    // ── REPLACE WITH YOUR PROJECT VALUES ─────────────────────────────
+    // ---- REPLACE WITH YOUR PROJECT VALUES ----
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
-    const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
-    // ─────────────────────────────────────────────────────────────────
-
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds"
+;
+    // ------------------------------------------
+  
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
+  
     function parseHash() {
-      const h = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+      const h = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
       const p = new URLSearchParams(h);
       return {
         access_token: p.get("access_token"),
-        refresh_token: p.get("refresh_token"),
-        type: (p.get("type") || "").toLowerCase()  // 'signup' | 'invite' | 'magiclink' | 'recovery' | ...
+        refresh_token: p.get("refresh_token")
       };
     }
   
-    // IMPORTANT: require tokens in URL; do NOT reuse an existing session
-    async function ensureSessionFromLink() {
+    // IMPORTANT: require tokens in URL; do NOT reuse any existing session
+    async function requireSessionFromLink() {
       const { access_token, refresh_token } = parseHash();
-      if (access_token && refresh_token) {
-        const { error } = await client.auth.setSession({ access_token, refresh_token });
-        if (error) return { ok:false, error };
-        return { ok:true };
+      if (!access_token || !refresh_token) {
+        return { ok: false, error: new Error("No tokens in link") };
       }
-      return { ok:false, error: new Error("No tokens in link") };
+      const { error } = await client.auth.setSession({ access_token, refresh_token });
+      if (error) return { ok:false, error };
+      return { ok:true };
     }
   
     async function sha256Hex(text) {
@@ -114,8 +114,8 @@
       const apply = document.getElementById("apply");
       const qa    = document.getElementById("qa_section");
   
-      // 1) Require a valid link with tokens
-      const sess = await ensureSessionFromLink();
+      // 1) Require a valid link
+      const sess = await requireSessionFromLink();
       if (!sess.ok) {
         msg.className = "err";
         msg.textContent = "Invalid or expired link. Please request a new email.";
@@ -126,41 +126,29 @@
       const { data: { session } } = await client.auth.getSession();
       const userId = session.user.id;
   
-      const { type } = parseHash();
-      const typeIsSetup = (type === "signup" || type === "invite" || type === "magiclink");
-      const typeIsReset = (type === "recovery");
+      // 2) Read profile and decide if the user still needs setup
+      let needsSetup = false;
+      try {
+        const prof = await client
+          .from("user_profile")
+          .select('"Secret Answer", initial_login')
+          .eq("user_id", userId)
+          .single();
   
-      // 2) Decide when to show Q/A
-      let showQA = false;
-  
-      if (typeIsReset) {
-        showQA = false;                // never show Q/A for password reset
-      } else if (typeIsSetup) {
-        showQA = true;                 // always for first-time setup links
-      } else {
-        // Fallback: check profile
-        try {
-          const prof = await client
-            .from("user_profile")
-            .select('"Secret Answer", initial_login')
-            .eq("user_id", userId)
-            .single();
-  
-          if (!prof.error) {
-            const ans  = (prof.data && (prof.data["Secret Answer"] || "")).trim();
-            const init = (prof.data && (prof.data.initial_login || "")).toLowerCase();
-            showQA = (!ans || init === "no");
-          } else {
-            // If we can't read profile (RLS etc.), assume first-time to be safe
-            showQA = true;
-          }
-        } catch {
-          showQA = true;
+        if (!prof.error) {
+          const ans  = (prof.data && (prof.data["Secret Answer"] || "")).trim();
+          const init = (prof.data && (prof.data.initial_login || "")).toLowerCase();
+          needsSetup = (!ans || init === "no");
+        } else {
+          // if profile read fails, assume first-time (show Q/A) to be safe
+          needsSetup = true;
         }
+      } catch {
+        needsSetup = true;
       }
   
-      // 3) Apply UI text + visibility
-      if (showQA) {
+      // 3) Apply UI and show/hide secret Q/A deterministically
+      if (needsSetup) {
         document.getElementById("title").textContent = "Finish account setup";
         document.getElementById("intro").textContent = "Select a secret question and set a new password.";
         qa.style.display = "";
@@ -170,7 +158,7 @@
         qa.style.display = "none";
       }
   
-      // 4) Save handler
+      // 4) Save
       apply.onclick = async () => {
         msg.className = "muted";
         msg.textContent = "Saving…";
@@ -185,14 +173,14 @@
           msg.className = "err"; msg.textContent = "Passwords do not match."; return;
         }
   
-        // 1) Update Auth password
+        // update Auth password
         const { error: pwErr } = await client.auth.updateUser({ password: pw });
         if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
   
-        // 2) If showing Q/A, require and save it
-        if (showQA) {
-          const q  = document.getElementById("question").value;
-          const a  = document.getElementById("answer").value.trim();
+        // if first-time setup, require and save secret Q/A
+        if (needsSetup) {
+          const q = document.getElementById("question").value;
+          const a = document.getElementById("answer").value.trim();
           if (!a) {
             msg.className = "err"; msg.textContent = "Please enter your secret answer."; return;
           }
@@ -216,6 +204,8 @@
   
     main();
   </script>
+
 </body>
 </html>
+
 
