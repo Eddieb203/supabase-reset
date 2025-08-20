@@ -16,6 +16,8 @@
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
+    .hidden { display:none; }
+    hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
   </style>
 </head>
 <body>
@@ -39,6 +41,14 @@
 
     <button id="apply">Save</button>
     <div id="msg" class="muted"></div>
+
+    <div id="resend" class="hidden">
+      <hr />
+      <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+      <button id="send">Send reset link</button>
+      <div id="resendMsg" class="muted"></div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -48,13 +58,18 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+    // Use this exact page for future resets (helps with Outlook)
+    const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2"; // cache-bust
+
     // Helpers
     const $ = (id) => document.getElementById(id);
     function bindShow(inputId, checkId) {
       const el = $(inputId), box = $(checkId);
-      if (el && box) box.onchange = e => { el.type = e.target.checked ? "text" : "password"; };
+      if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
     }
-    // Unwrap Outlook/Proofpoint safe-links (they wrap your URL inside ?url= or ?target=)
+    function showResend() { $("#resend").classList.remove("hidden"); }
+
+    // Unwrap Outlook/Proofpoint safe-links (?url= / ?target=)
     function effectiveUrl() {
       const outer = new URL(window.location.href);
       const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
@@ -67,22 +82,25 @@
     const qs   = eff.searchParams;
     const getParam = (k) => hash.get(k) ?? qs.get(k);
 
-    // Show script errors in-page instead of failing silently
+    // Show script errors on the page (no more silent failures)
     window.addEventListener("error", (e) => {
       const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
     });
 
-    // Always make Save clickable; we’ll validate session on click
+    // Always wire buttons
     $("#apply").onclick = updatePassword;
+    $("#send").onclick  = resend;
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
 
-    // Try to establish a session in the background (PKCE code or legacy hash tokens)
-    (async function init() {
+    // Try to build a session (PKCE code or legacy hash tokens)
+    (async function boot() {
+      // If Supabase redirected with errors (e.g., otp_expired), show them
       const err = getParam("error") || getParam("error_code");
-      const errDesc = getParam("error_description");
+      const desc = getParam("error_description");
       if (err) {
         $("#msg").className = "err";
-        $("#msg").textContent = errDesc || "Email link is invalid or has expired.";
+        $("#msg").textContent = desc || "Email link is invalid or has expired.";
+        showResend();
         return;
       }
 
@@ -92,6 +110,7 @@
         if (error) {
           $("#msg").className = "err";
           $("#msg").textContent = "Auth error: " + error.message;
+          showResend();
           return;
         }
       } else {
@@ -102,12 +121,13 @@
           if (error) {
             $("#msg").className = "err";
             $("#msg").textContent = "Auth error: " + error.message;
+            showResend();
             return;
           }
         }
       }
 
-      // Personalize if possible (nice-to-have)
+      // Personalize if we have a user
       const { data: { user } } = await client.auth.getUser();
       if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
     })();
@@ -117,11 +137,12 @@
       msg.className = "muted";
       msg.textContent = "Saving…";
 
-      // Guard: require a valid reset session (prevents silent failure)
+      // Require a valid session; otherwise explain why it won't work
       const { data: { session } } = await client.auth.getSession();
       if (!session?.access_token) {
         msg.className = "err";
-        msg.textContent = "No valid reset session. Open the newest email link in this browser. (Outlook Safe Links may have consumed the old one.)";
+        msg.textContent = "No valid reset session. Request a fresh link below, then open the newest email.";
+        showResend();
         return;
       }
 
@@ -136,6 +157,16 @@
       await client.auth.signOut();
       msg.className = "ok";
       msg.textContent = "Saved. You can close this tab and sign in with your new password.";
+    }
+
+    async function resend() {
+      const out = $("#resendMsg");
+      const email = $("#email").value.trim();
+      if (!email) { out.className = "err"; out.textContent = "Enter your email address."; return; }
+      out.className = "muted"; out.textContent = "Sending…";
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: REDIRECT_URL });
+      if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
+      out.className = "ok"; out.textContent = "Sent. Check your inbox for a fresh link.";
     }
   </script>
 </body>
