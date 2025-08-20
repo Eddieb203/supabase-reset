@@ -26,7 +26,7 @@
   <div class="card">
     <div class="muted" id="intro">Enter and confirm your new password (minimum 6 characters).</div>
 
-    <!-- New: defanged loader -->
+    <!-- Defanged loader -->
     <div id="loaderBox" class="hidden">
       <hr />
       <p><strong>Step 1:</strong> Click to load your secure reset session.</p>
@@ -69,7 +69,7 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // Redirect back to THIS page for resend (cache-busted)
+    // Redirect used when resending
     const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
 
     // ---------- helpers ----------
@@ -94,7 +94,7 @@
     const qs   = eff.searchParams;
     const qp   = (k) => hash.get(k) ?? qs.get(k);
 
-    // Show script errors inline (so failures aren't silent)
+    // Show script errors inline
     window.addEventListener("error", (e) => {
       const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
     });
@@ -105,10 +105,10 @@
     $("#send").onclick  = resend;
     $("#loadReset").onclick = loadReset;
 
-    // ----- boot: do NOT auto-consume links; only show the loader if we have data -----
+    // ----- boot: don't auto-consume; just decide what to show -----
     (async function boot() {
-      // If the email was scanned and Supabase appended errors to the URL, show them + the resend box.
-      const err = qp("error") || qp("error_code");
+      // If Supabase appended errors (e.g., otp_expired), show them and the resend UI
+      const err  = qp("error") || qp("error_code");
       const desc = qp("error_description");
       if (err) {
         $("#msg").className = "err";
@@ -116,56 +116,66 @@
         showResend();
       }
 
-      // If the email template passed us the real link as ?confirmation_url=..., show the loader.
-      const confirmationURL = qp("confirmation_url");
-      const tokenHash = qp("token_hash");
-      const type = qp("type"); // expect 'recovery' when using token_hash route
+      // Show loader if we have any reset info (code / token_hash / token) or a confirmation_url wrapper
+      const haveResetInfo =
+        !!(qp("confirmation_url") || qp("code") || qp("token_hash") || qp("token"));
+      if (haveResetInfo) showLoader();
 
-      if (confirmationURL || tokenHash) {
-        showLoader();
-      }
-
-      // Personalize if we already have a session (e.g., user clicked Load already)
+      // Personalize if a session already exists
       const { data: { user } } = await client.auth.getUser();
       if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
     })();
 
     // ---- Step 1: User-initiated "load reset" (defanged) ----
     async function loadReset() {
+      const btn = $("#loadReset");
       const loadMsg = $("#loadMsg");
+      btn.disabled = true;
       loadMsg.className = "muted";
       loadMsg.textContent = "Preparing reset session…";
 
-      let tokenHash = qp("token_hash");
-      let type = qp("type") || "recovery";
+      // Gather tokens from top-level URL
+      let code      = qp("code");
+      let tokenHash = qp("token_hash") || qp("token"); // support both names
+      let type      = qp("type") || "recovery";
 
-      // If we were given ?confirmation_url=..., extract token & type from it
-      if (!tokenHash && qp("confirmation_url")) {
+      // If we were given ?confirmation_url=..., parse from inside it as well
+      const conf = qp("confirmation_url");
+      if (conf) {
         try {
-          const url = new URL(qp("confirmation_url"));
-          tokenHash = url.searchParams.get("token");   // Supabase uses 'token' for the hash in the URL
-          type = url.searchParams.get("type") || "recovery";
+          const u = new URL(conf);
+          code       = code      || u.searchParams.get("code");
+          tokenHash  = tokenHash || u.searchParams.get("token_hash") || u.searchParams.get("token");
+          type       =             u.searchParams.get("type") || type;
         } catch {
           loadMsg.className = "err";
           loadMsg.textContent = "Malformed confirmation_url.";
+          btn.disabled = false;
           return;
         }
       }
 
-      if (!tokenHash) {
+      if (!code && !tokenHash) {
         loadMsg.className = "err";
-        loadMsg.textContent = "Missing token. Use the latest email.";
+        loadMsg.textContent = "Missing token. Open the newest email and try again.";
         showResend();
+        btn.disabled = false;
         return;
       }
 
-      // Verify the token hash on click (NOT on page load) to create a session
-      // (Supported by supabase-js: verifyOtp with token_hash + type 'recovery')
-      const { data, error } = await client.auth.verifyOtp({ token_hash: tokenHash, type });
-      if (error) {
+      try {
+        if (code) {
+          const { error } = await client.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+        } else {
+          const { error } = await client.auth.verifyOtp({ token_hash: tokenHash, type: type || "recovery" });
+          if (error) throw error;
+        }
+      } catch (e) {
         loadMsg.className = "err";
-        loadMsg.textContent = "Auth error: " + error.message;
+        loadMsg.textContent = "Auth error: " + e.message;
         showResend();
+        btn.disabled = false;
         return;
       }
 
@@ -173,6 +183,7 @@
       loadMsg.textContent = "Reset session ready. You can set a new password below.";
       const { data: { user } } = await client.auth.getUser();
       if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
+      btn.disabled = false;
     }
 
     // ---- Step 2: Update password (requires a valid session) ----
@@ -202,7 +213,7 @@
       msg.textContent = "Saved. You can close this tab and sign in with your new password.";
     }
 
-    // ---- Fallback: resend a fresh link (still useful for Gmail, etc.) ----
+    // ---- Fallback: resend a fresh link ----
     async function resend() {
       const out = $("#resendMsg");
       const email = $("#email").value.trim();
