@@ -70,7 +70,7 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds"
 ;
     // ------------------------------------------
-  
+
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   
     function parseHash() {
@@ -78,7 +78,8 @@
       const p = new URLSearchParams(h);
       return {
         access_token: p.get("access_token"),
-        refresh_token: p.get("refresh_token")
+        refresh_token: p.get("refresh_token"),
+        type: (p.get("type") || "").toLowerCase()  // 'signup' | 'invite' | 'magiclink' | 'recovery' | ...
       };
     }
   
@@ -114,7 +115,7 @@
       const apply = document.getElementById("apply");
       const qa    = document.getElementById("qa_section");
   
-      // 1) Require a valid link
+      // 1) Require a valid link (no fallback to old session)
       const sess = await requireSessionFromLink();
       if (!sess.ok) {
         msg.className = "err";
@@ -126,6 +127,9 @@
       const { data: { session } } = await client.auth.getSession();
       const userId = session.user.id;
   
+      const { type } = parseHash();
+      console.log("[RESET PAGE] hash.type =", type || "(none)");
+  
       // 2) Read profile and decide if the user still needs setup
       let needsSetup = false;
       try {
@@ -135,6 +139,8 @@
           .eq("user_id", userId)
           .single();
   
+        console.log("[RESET PAGE] profile result:", prof);
+  
         if (!prof.error) {
           const ans  = (prof.data && (prof.data["Secret Answer"] || "")).trim();
           const init = (prof.data && (prof.data.initial_login || "")).toLowerCase();
@@ -143,12 +149,20 @@
           // if profile read fails, assume first-time (show Q/A) to be safe
           needsSetup = true;
         }
-      } catch {
+      } catch (e) {
+        console.log("[RESET PAGE] profile read failed:", e);
         needsSetup = true;
       }
   
-      // 3) Apply UI and show/hide secret Q/A deterministically
-      if (needsSetup) {
+      // 3) Determine Q/A visibility
+      // Always hide for password reset; otherwise show if setup link or profile says still needed
+      const isReset = (type === "recovery");
+      const isSetupLink = (type === "signup" || type === "invite" || type === "magiclink");
+      const showQA = !isReset && (isSetupLink || needsSetup);
+  
+      console.log("[RESET PAGE] showQA =", showQA, " (isReset=",isReset,", isSetupLink=",isSetupLink,", needsSetup=",needsSetup,")");
+  
+      if (showQA) {
         document.getElementById("title").textContent = "Finish account setup";
         document.getElementById("intro").textContent = "Select a secret question and set a new password.";
         qa.style.display = "";
@@ -173,17 +187,15 @@
           msg.className = "err"; msg.textContent = "Passwords do not match."; return;
         }
   
-        // update Auth password
+        // Update Auth password
         const { error: pwErr } = await client.auth.updateUser({ password: pw });
         if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
   
-        // if first-time setup, require and save secret Q/A
-        if (needsSetup) {
+        // Save Secret Q/A only if we showed the section
+        if (showQA) {
           const q = document.getElementById("question").value;
           const a = document.getElementById("answer").value.trim();
-          if (!a) {
-            msg.className = "err"; msg.textContent = "Please enter your secret answer."; return;
-          }
+          if (!a) { msg.className = "err"; msg.textContent = "Please enter your secret answer."; return; }
           try {
             const hashed = await sha256Hex(a);
             const upd = await client.from("user_profile")
@@ -204,8 +216,8 @@
   
     main();
   </script>
-
 </body>
 </html>
+
 
 
