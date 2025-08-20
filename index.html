@@ -16,6 +16,9 @@
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+    .hidden { display: none; }
+    hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
   </style>
 </head>
 <body>
@@ -37,105 +40,171 @@
       <span class="small">Show</span>
     </div>
 
-    <button id="apply">Save</button>
+    <button id="apply" disabled>Save</button>
     <div id="msg" class="muted"></div>
+
+    <!-- Resend UI (shown when link is invalid/expired or token exchange fails) -->
+    <div id="resend" class="hidden">
+      <hr />
+      <label for="email">Didn’t work? Enter your email and we’ll send a fresh reset link.</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+      <button id="send">Send me a reset link</button>
+      <div id="resendMsg" class="muted"></div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     // -- YOUR PROJECT VALUES --
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds"
-;
-    // -------------------------
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // Optional: where to send users after success (leave "" to not redirect)
+    const LOGIN_URL = "";
+
+    // Use this exact page (without query/hash) for future resets
+    const REDIRECT_URL = window.location.origin + window.location.pathname;
 
     // Helpers
     const $ = (id) => document.getElementById(id);
-    const params = new URL(window.location.href);
-    const hash = new URLSearchParams(params.hash.slice(1));
-    const query = params.searchParams;
+    const url = new URL(window.location.href);
+    const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : "");
+    const query = url.searchParams;
     const getParam = (k) => hash.get(k) ?? query.get(k);
-  
-    async function init() {
-      // Show explicit Supabase errors if present
-      const err = getParam("error") || getParam("error_code");
-      const errDesc = getParam("error_description");
-      if (err) {
-        $("#msg").className = "err";
-        $("#msg").textContent = (errDesc || "Email link is invalid or has expired");
-        $("#apply").disabled = true;
-        return;
-      }
-  
-      // Primary: PKCE code flow
-      const code = getParam("code");
-      if (code) {
-        const { error } = await client.auth.exchangeCodeForSession(code);
-        if (error) {
-          $("#msg").className = "err";
-          $("#msg").textContent = "Auth error: " + error.message;
-          $("#apply").disabled = true;
-          return;
-        }
-        return afterSessionReady();
-      }
-  
-      // Fallback: legacy hash tokens
-      const at = getParam("access_token");
-      const rt = getParam("refresh_token");
-      if (at && rt) {
-        const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
-        if (error) {
-          $("#msg").className = "err";
-          $("#msg").textContent = "Auth error: " + error.message;
-          $("#apply").disabled = true;
-          return;
-        }
-        return afterSessionReady();
-      }
-  
-      // Nothing usable in URL
-      $("#msg").className = "err";
-      $("#msg").textContent = "Invalid or expired link. Please request a new email.";
+
+    // Show JS errors on the page (helps when nothing seems to happen)
+    window.addEventListener("error", (e) => {
+      const m = $("#msg");
+      if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
+    });
+
+    function showResend() {
+      $("#resend").classList.remove("hidden");
       $("#apply").disabled = true;
     }
-  
-    async function afterSessionReady() {
-      const { data: { user } } = await client.auth.getUser();
-      if (user?.email) {
-        $("#intro").textContent = `Set a new password for ${user.email}`;
+
+    async function init() {
+      try {
+        // Show explicit Supabase errors if present
+        const err = getParam("error") || getParam("error_code");
+        const errDesc = getParam("error_description");
+        if (err) {
+          $("#msg").className = "err";
+          $("#msg").textContent = errDesc || "Email link is invalid or has expired.";
+          showResend();
+          return;
+        }
+
+        let sessionOk = false;
+
+        // Primary: PKCE code flow
+        const code = getParam("code");
+        if (code) {
+          const { error } = await client.auth.exchangeCodeForSession(code);
+          if (!error) {
+            sessionOk = true;
+          } else {
+            $("#msg").className = "err";
+            $("#msg").textContent = "Auth error: " + error.message;
+            showResend();
+            return;
+          }
+        } else {
+          // Fallback: legacy hash tokens
+          const at = getParam("access_token");
+          const rt = getParam("refresh_token");
+          if (at && rt) {
+            const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
+            if (!error) {
+              sessionOk = true;
+            } else {
+              $("#msg").className = "err";
+              $("#msg").textContent = "Auth error: " + error.message;
+              showResend();
+              return;
+            }
+          }
+        }
+
+        if (!sessionOk) {
+          $("#msg").className = "err";
+          $("#msg").textContent = "Invalid or expired link. Request a new email below.";
+          showResend();
+          return;
+        }
+
+        // Session is ready -> personalize and enable Save
+        const { data: { user } } = await client.auth.getUser();
+        if (user?.email) {
+          $("#intro").textContent = `Set a new password for ${user.email}`;
+        }
+
+        $("#apply").disabled = false;
+        $("#apply").onclick = updatePassword;
+
+        // Enter key submits
+        ["pw", "pw2"].forEach(id => {
+          const el = $(id);
+          if (el) el.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") $("#apply").click();
+          });
+        });
+
+        // Resend handler
+        $("#send").onclick = resend;
+
+        // Bind show/hide checkboxes
+        bindShow("pw", "showPw");
+        bindShow("pw2", "showPw2");
+      } catch (e) {
+        $("#msg").className = "err";
+        $("#msg").textContent = "Unexpected error. Please request a new link below.";
+        showResend();
       }
-      // Bind button
-      $("#apply").onclick = updatePassword;
     }
-  
+
+    function bindShow(inputId, checkId) {
+      const el = $(inputId), box = $(checkId);
+      if (el && box) box.onchange = (e) => { el.type = e.target.checked ? "text" : "password"; };
+    }
+
     async function updatePassword() {
-      $("#msg").className = "muted"; $("#msg").textContent = "Saving…";
-      const pw = $("#pw").value.trim(), p2 = $("#pw2").value.trim();
-      if (pw.length < 6) { $("#msg").className = "err"; $("#msg").textContent = "Password must be at least 6 characters."; return; }
-      if (pw !== p2)     { $("#msg").className = "err"; $("#msg").textContent = "Passwords do not match."; return; }
-  
+      const btn = $("#apply");
+      btn.disabled = true;
+      $("#msg").className = "muted";
+      $("#msg").textContent = "Saving…";
+
+      const pw = $("#pw").value.trim();
+      const p2 = $("#pw2").value.trim();
+      if (pw.length < 6) { $("#msg").className = "err"; $("#msg").textContent = "Password must be at least 6 characters."; btn.disabled = false; return; }
+      if (pw !== p2)     { $("#msg").className = "err"; $("#msg").textContent = "Passwords do not match."; btn.disabled = false; return; }
+
       const { error } = await client.auth.updateUser({ password: pw });
-      if (error) { $("#msg").className = "err"; $("#msg").textContent = "Auth error: " + error.message; return; }
-  
-      // Clean up session so the tab isn’t left logged in
+      if (error) { $("#msg").className = "err"; $("#msg").textContent = "Auth error: " + error.message; btn.disabled = false; return; }
+
       await client.auth.signOut();
       $("#msg").className = "ok";
       $("#msg").textContent = "Saved. You can close this tab and sign in with your new password.";
+      if (LOGIN_URL) setTimeout(() => { location.href = LOGIN_URL; }, 1500);
     }
-  
-    // show/hide checkboxes (unchanged from your page)
-    (function bindShow() {
-      const toggle = (inputId, boxId) => { const i=$(inputId), b=$(boxId); if(b) b.onchange=e=>{ i.type = e.target.checked ? "text" : "password"; }; };
-      toggle("pw","showPw"); toggle("pw2","showPw2");
-    })();
-  
+
+    async function resend() {
+      const email = $("#email").value.trim();
+      const out = $("#resendMsg");
+      if (!email) { out.className = "err"; out.textContent = "Enter your email address."; return; }
+
+      out.className = "muted";
+      out.textContent = "Sending…";
+
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: REDIRECT_URL });
+      if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
+
+      out.className = "ok";
+      out.textContent = "Sent. Check your inbox for a new reset link.";
+    }
+
     init();
   </script>
 </body>
 </html>
-
-
-
-
