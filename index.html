@@ -49,64 +49,91 @@
 ;
     // -------------------------
 
-    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    function parseHash() {
-      const h = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
-      const p = new URLSearchParams(h);
-      return { access_token: p.get("access_token"), refresh_token: p.get("refresh_token") };
-    }
-
-    // Require tokens in the link; do NOT reuse any existing session
-    async function requireSessionFromLink() {
-      const { access_token, refresh_token } = parseHash();
-      if (!access_token || !refresh_token) return { ok:false, error:new Error("No tokens in link") };
-      const { error } = await client.auth.setSession({ access_token, refresh_token });
-      return error ? { ok:false, error } : { ok:true };
-    }
-
-    function bindShow(idInput, idCheck) {
-      const el = document.getElementById(idInput);
-      const box = document.getElementById(idCheck);
-      if (el && box) box.onchange = (e)=> el.type = e.target.checked ? "text" : "password";
-    }
-
-    async function main() {
-      bindShow("pw","showPw");
-      bindShow("pw2","showPw2");
-
-      const msg   = document.getElementById("msg");
-      const apply = document.getElementById("apply");
-
-      const sess = await requireSessionFromLink();
-      if (!sess.ok) {
-        msg.className = "err";
-        msg.textContent = "Invalid or expired link. Please request a new email.";
-        apply.disabled = true;
+    // Helpers
+    const $ = (id) => document.getElementById(id);
+    const params = new URL(window.location.href);
+    const hash = new URLSearchParams(params.hash.slice(1));
+    const query = params.searchParams;
+    const getParam = (k) => hash.get(k) ?? query.get(k);
+  
+    async function init() {
+      // Show explicit Supabase errors if present
+      const err = getParam("error") || getParam("error_code");
+      const errDesc = getParam("error_description");
+      if (err) {
+        $("#msg").className = "err";
+        $("#msg").textContent = (errDesc || "Email link is invalid or has expired");
+        $("#apply").disabled = true;
         return;
       }
-
-      apply.onclick = async () => {
-        msg.className = "muted";
-        msg.textContent = "Saving…";
-
-        const pw  = document.getElementById("pw").value.trim();
-        const p2  = document.getElementById("pw2").value.trim();
-
-        if (!pw || pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
-        if (pw !== p2)           { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
-
-        const { error } = await client.auth.updateUser({ password: pw });
-        if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
-
-        msg.className = "ok";
-        msg.textContent = "Saved. You can close this tab and sign in with your new password.";
-      };
+  
+      // Primary: PKCE code flow
+      const code = getParam("code");
+      if (code) {
+        const { error } = await client.auth.exchangeCodeForSession(code);
+        if (error) {
+          $("#msg").className = "err";
+          $("#msg").textContent = "Auth error: " + error.message;
+          $("#apply").disabled = true;
+          return;
+        }
+        return afterSessionReady();
+      }
+  
+      // Fallback: legacy hash tokens
+      const at = getParam("access_token");
+      const rt = getParam("refresh_token");
+      if (at && rt) {
+        const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
+        if (error) {
+          $("#msg").className = "err";
+          $("#msg").textContent = "Auth error: " + error.message;
+          $("#apply").disabled = true;
+          return;
+        }
+        return afterSessionReady();
+      }
+  
+      // Nothing usable in URL
+      $("#msg").className = "err";
+      $("#msg").textContent = "Invalid or expired link. Please request a new email.";
+      $("#apply").disabled = true;
     }
-
-    main();
+  
+    async function afterSessionReady() {
+      const { data: { user } } = await client.auth.getUser();
+      if (user?.email) {
+        $("#intro").textContent = `Set a new password for ${user.email}`;
+      }
+      // Bind button
+      $("#apply").onclick = updatePassword;
+    }
+  
+    async function updatePassword() {
+      $("#msg").className = "muted"; $("#msg").textContent = "Saving…";
+      const pw = $("#pw").value.trim(), p2 = $("#pw2").value.trim();
+      if (pw.length < 6) { $("#msg").className = "err"; $("#msg").textContent = "Password must be at least 6 characters."; return; }
+      if (pw !== p2)     { $("#msg").className = "err"; $("#msg").textContent = "Passwords do not match."; return; }
+  
+      const { error } = await client.auth.updateUser({ password: pw });
+      if (error) { $("#msg").className = "err"; $("#msg").textContent = "Auth error: " + error.message; return; }
+  
+      // Clean up session so the tab isn’t left logged in
+      await client.auth.signOut();
+      $("#msg").className = "ok";
+      $("#msg").textContent = "Saved. You can close this tab and sign in with your new password.";
+    }
+  
+    // show/hide checkboxes (unchanged from your page)
+    (function bindShow() {
+      const toggle = (inputId, boxId) => { const i=$(inputId), b=$(boxId); if(b) b.onchange=e=>{ i.type = e.target.checked ? "text" : "password"; }; };
+      toggle("pw","showPw"); toggle("pw2","showPw2");
+    })();
+  
+    init();
   </script>
 </body>
 </html>
+
 
 
