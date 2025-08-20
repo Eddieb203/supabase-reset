@@ -16,7 +16,8 @@
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
-    .hidden { display:none; }
+    .hidden { display: none; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
     hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
   </style>
 </head>
@@ -42,6 +43,7 @@
     <button id="apply">Save</button>
     <div id="msg" class="muted"></div>
 
+    <!-- 🔁 Resend box (appears automatically on expired/invalid links, or with ?showResend=1) -->
     <div id="resend" class="hidden">
       <hr />
       <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
@@ -58,19 +60,18 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // Use this exact page for future resets (helps with Outlook)
-    const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2"; // cache-bust
+    // Redirect back to THIS page (add a version to bust GH Pages cache)
+    const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
 
-    // Helpers
+    // -------- helpers --------
     const $ = (id) => document.getElementById(id);
     function bindShow(inputId, checkId) {
       const el = $(inputId), box = $(checkId);
       if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
     }
     function showResend() { $("#resend").classList.remove("hidden"); }
-
-    // Unwrap Outlook/Proofpoint safe-links (?url= / ?target=)
     function effectiveUrl() {
+      // Unwrap Outlook / Egress / Proofpoint wrappers (?url=, ?target=, etc.)
       const outer = new URL(window.location.href);
       const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
                       outer.searchParams.get("u")   || outer.searchParams.get("redirect");
@@ -82,19 +83,22 @@
     const qs   = eff.searchParams;
     const getParam = (k) => hash.get(k) ?? qs.get(k);
 
-    // Show script errors on the page (no more silent failures)
+    // Show script errors on the page instead of failing silently
     window.addEventListener("error", (e) => {
       const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
     });
 
-    // Always wire buttons
+    // Always wire buttons (Save is always clickable; we validate session on click)
     $("#apply").onclick = updatePassword;
     $("#send").onclick  = resend;
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
 
-    // Try to build a session (PKCE code or legacy hash tokens)
+    // ---- boot: try to create a session from the URL; show resend UI if invalid/expired ----
     (async function boot() {
-      // If Supabase redirected with errors (e.g., otp_expired), show them
+      // Force-show via ?showResend=1 (handy for debugging)
+      if (getParam("showResend") === "1") showResend();
+
+      // If Supabase returned explicit errors (e.g., otp_expired), show them + the resend box
       const err = getParam("error") || getParam("error_code");
       const desc = getParam("error_description");
       if (err) {
@@ -104,6 +108,7 @@
         return;
       }
 
+      // Primary: PKCE ?code= flow
       const code = getParam("code");
       if (code) {
         const { error } = await client.auth.exchangeCodeForSession(code);
@@ -114,6 +119,7 @@
           return;
         }
       } else {
+        // Fallback: legacy #access_token/#refresh_token
         const at = getParam("access_token");
         const rt = getParam("refresh_token");
         if (at && rt) {
@@ -137,7 +143,7 @@
       msg.className = "muted";
       msg.textContent = "Saving…";
 
-      // Require a valid session; otherwise explain why it won't work
+      // Require a valid reset session (prevents silent failure)
       const { data: { session } } = await client.auth.getSession();
       if (!session?.access_token) {
         msg.className = "err";
