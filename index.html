@@ -2,47 +2,40 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Account Setup / Reset</title>
+  <title>Set Your Password</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; }
-    .card { max-width: 520px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
-    input, select, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; }
+    .card { max-width: 560px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
+    input, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; }
     label { font-size: .95rem; font-weight: 600; margin-top: .25rem; display: block; }
     .row { display: flex; align-items: center; gap: .5rem; }
     .ok { color: #16a34a; margin-top: .4rem; }
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
+    .hidden { display: none; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+    hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
   </style>
 </head>
 <body>
-  <h2 id="title">Finish account setup</h2>
+  <h2 id="title">Set your password</h2>
   <div class="card">
-    <div class="muted" id="intro">Select a secret question and set a new password.</div>
+    <div class="muted" id="intro">Enter and confirm your new password (minimum 6 characters).</div>
 
-    <!-- Secret Q/A is inside qa_section so we can hide it for password reset -->
-    <div id="qa_section">
-      <label for="question">Secret question</label>
-      <select id="question">
-        <option>What is your pet's name?</option>
-        <option>What is your mother's maiden name?</option>
-        <option>What is your favorite color?</option>
-        <option>What was the name of your first school?</option>
-        <option>In what city were you born?</option>
-        <option>What was the model of your first car?</option>
-        <option>What is your favorite movie?</option>
-      </select>
-
-      <label for="answer">Secret answer</label>
-      <div class="row">
-        <input id="answer" type="password" placeholder="Your answer" />
-        <input id="showAnswer" type="checkbox" />
-        <span class="small">Show</span>
-      </div>
+    <!-- New: defanged loader -->
+    <div id="loaderBox" class="hidden">
+      <hr />
+      <p><strong>Step 1:</strong> Click to load your secure reset session.</p>
+      <button id="loadReset">Load password reset</button>
+      <div id="loadMsg" class="muted"></div>
     </div>
 
-    <label for="pw">New password <span class="small">(minimum 6 characters)</span></label>
+    <hr />
+    <label for="pw">New password <span class="small">(min 6)</span></label>
     <div class="row">
       <input id="pw" type="password" placeholder="New password" />
       <input id="showPw" type="checkbox" />
@@ -58,134 +51,167 @@
 
     <button id="apply">Save</button>
     <div id="msg" class="muted"></div>
+
+    <!-- Resend box (fallback) -->
+    <div id="resend" class="hidden">
+      <hr />
+      <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+      <button id="send">Send reset link</button>
+      <div id="resendMsg" class="muted"></div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    // ── REPLACE WITH YOUR PROJECT VALUES ─────────────────────────────
+    // -- Your project values --
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
-    // ─────────────────────────────────────────────────────────────────
-
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // Parse access/refresh tokens from URL hash
-    function parseHash() {
-      const h = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
-      const p = new URLSearchParams(h);
-      return {
-        access_token: p.get("access_token"),
-        refresh_token: p.get("refresh_token"),
-        type: p.get("type") // 'signup' or 'recovery'
-      };
+    // Redirect back to THIS page for resend (cache-busted)
+    const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
+
+    // ---------- helpers ----------
+    const $ = (id) => document.getElementById(id);
+    function bindShow(inputId, checkId) {
+      const el = $(inputId), box = $(checkId);
+      if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
     }
+    function showResend() { $("#resend").classList.remove("hidden"); }
+    function showLoader() { $("#loaderBox").classList.remove("hidden"); }
 
-    async function ensureSessionFromLink() {
-      const { access_token, refresh_token } = parseHash();
-      if (access_token && refresh_token) {
-        const { error } = await client.auth.setSession({ access_token, refresh_token });
-        if (error) return { ok:false, error };
-        return { ok:true };
-      }
-      const { data, error } = await client.auth.getSession();
-      if (error || !data.session) return { ok:false, error: error || new Error("No session") };
-      return { ok:true };
+    // Unwrap common mail scanners (?url= / ?target= / ?u= / ?redirect=)
+    function effectiveUrl() {
+      const outer = new URL(window.location.href);
+      const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
+                      outer.searchParams.get("u")   || outer.searchParams.get("redirect");
+      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; }
+      catch { return outer; }
     }
+    const eff  = effectiveUrl();
+    const hash = new URLSearchParams(eff.hash.startsWith("#") ? eff.hash.slice(1) : "");
+    const qs   = eff.searchParams;
+    const qp   = (k) => hash.get(k) ?? qs.get(k);
 
-    // hash secret answer (SHA-256 → hex)
-    async function sha256Hex(text) {
-      const enc = new TextEncoder().encode(text);
-      const buf = await crypto.subtle.digest("SHA-256", enc);
-      return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
-    }
+    // Show script errors inline (so failures aren't silent)
+    window.addEventListener("error", (e) => {
+      const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
+    });
 
-    // Toggle show/hide inputs
-    function bindShow(idInput, idCheck) {
-      const el = document.getElementById(idInput);
-      const box = document.getElementById(idCheck);
-      if (el && box) box.onchange = (e)=> el.type = e.target.checked ? "text" : "password";
-    }
+    // Wire UI
+    bindShow("pw","showPw"); bindShow("pw2","showPw2");
+    $("#apply").onclick = updatePassword;
+    $("#send").onclick  = resend;
+    $("#loadReset").onclick = loadReset;
 
-    async function main() {
-      bindShow("answer","showAnswer");
-      bindShow("pw","showPw");
-      bindShow("pw2","showPw2");
-
-      const msg   = document.getElementById("msg");
-      const apply = document.getElementById("apply");
-      const qa    = document.getElementById("qa_section");
-
-      const params = new URLSearchParams(location.hash.slice(1));
-      const type = params.get("type"); // 'signup' or 'recovery'
-
-      // Title/intro and show/hide Q/A
-      if (type === "recovery") {
-        document.getElementById("title").textContent = "Reset your password";
-        document.getElementById("intro").textContent = "Enter and confirm your new password.";
-        if (qa) qa.style.display = "none";          // hide secret Q/A for reset
-      } else {
-        document.getElementById("title").textContent = "Finish account setup";
-        document.getElementById("intro").textContent = "Select a secret question and set a new password.";
-        if (qa) qa.style.display = "";              // show Q/A for first-time setup
+    // ----- boot: do NOT auto-consume links; only show the loader if we have data -----
+    (async function boot() {
+      // If the email was scanned and Supabase appended errors to the URL, show them + the resend box.
+      const err = qp("error") || qp("error_code");
+      const desc = qp("error_description");
+      if (err) {
+        $("#msg").className = "err";
+        $("#msg").textContent = desc || "Email link is invalid or has expired.";
+        showResend();
       }
 
-      // Ensure session from email link
-      const rec = await ensureSessionFromLink();
-      if (!rec.ok) {
-        msg.className = "err";
-        msg.textContent = "Invalid or expired link. Please request a new email.";
-        apply.disabled = true;
+      // If the email template passed us the real link as ?confirmation_url=..., show the loader.
+      const confirmationURL = qp("confirmation_url");
+      const tokenHash = qp("token_hash");
+      const type = qp("type"); // expect 'recovery' when using token_hash route
+
+      if (confirmationURL || tokenHash) {
+        showLoader();
+      }
+
+      // Personalize if we already have a session (e.g., user clicked Load already)
+      const { data: { user } } = await client.auth.getUser();
+      if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
+    })();
+
+    // ---- Step 1: User-initiated "load reset" (defanged) ----
+    async function loadReset() {
+      const loadMsg = $("#loadMsg");
+      loadMsg.className = "muted";
+      loadMsg.textContent = "Preparing reset session…";
+
+      let tokenHash = qp("token_hash");
+      let type = qp("type") || "recovery";
+
+      // If we were given ?confirmation_url=..., extract token & type from it
+      if (!tokenHash && qp("confirmation_url")) {
+        try {
+          const url = new URL(qp("confirmation_url"));
+          tokenHash = url.searchParams.get("token");   // Supabase uses 'token' for the hash in the URL
+          type = url.searchParams.get("type") || "recovery";
+        } catch {
+          loadMsg.className = "err";
+          loadMsg.textContent = "Malformed confirmation_url.";
+          return;
+        }
+      }
+
+      if (!tokenHash) {
+        loadMsg.className = "err";
+        loadMsg.textContent = "Missing token. Use the latest email.";
+        showResend();
         return;
       }
 
-      const { data: { session } } = await client.auth.getSession();
-      const userId = session.user.id;
+      // Verify the token hash on click (NOT on page load) to create a session
+      // (Supported by supabase-js: verifyOtp with token_hash + type 'recovery')
+      const { data, error } = await client.auth.verifyOtp({ token_hash: tokenHash, type });
+      if (error) {
+        loadMsg.className = "err";
+        loadMsg.textContent = "Auth error: " + error.message;
+        showResend();
+        return;
+      }
 
-      apply.onclick = async () => {
-        msg.className = "muted";
-        msg.textContent = "Saving…";
-
-        const pw  = document.getElementById("pw").value.trim();
-        const p2  = document.getElementById("pw2").value.trim();
-
-        // Password validation (always required)
-        if (!pw || pw.length < 6) {
-          msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return;
-        }
-        if (pw !== p2) {
-          msg.className = "err"; msg.textContent = "Passwords do not match."; return;
-        }
-
-        // 1) Update Auth password
-        const { error: pwErr } = await client.auth.updateUser({ password: pw });
-        if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
-
-        // 2) Only on first-time setup (signup) update secret Q/A
-        if (type === "signup" && qa && qa.style.display !== "none") {
-          const q  = document.getElementById("question").value;
-          const a  = document.getElementById("answer").value.trim();
-          if (!a) {
-            msg.className = "err"; msg.textContent = "Please enter your secret answer."; return;
-          }
-          try {
-            const hashed = await sha256Hex(a);
-            const upd = await client.from("user_profile")
-              .update({ "Secret Question": q, "Secret Answer": hashed, "initial_login": "Yes" })
-              .eq("user_id", userId);
-            if (upd.error) throw upd.error;
-          } catch (e) {
-            console.warn("Profile update failed:", e);
-            msg.className = "err"; msg.textContent = "Profile update error: " + (e.message || e);
-            return;
-          }
-        }
-
-        msg.className = "ok";
-        msg.textContent = "Saved. You can close this tab and sign in with your new password.";
-      };
+      loadMsg.className = "ok";
+      loadMsg.textContent = "Reset session ready. You can set a new password below.";
+      const { data: { user } } = await client.auth.getUser();
+      if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
     }
 
-    main();
+    // ---- Step 2: Update password (requires a valid session) ----
+    async function updatePassword() {
+      const msg = $("#msg");
+      msg.className = "muted";
+      msg.textContent = "Saving…";
+
+      const { data: { session } } = await client.auth.getSession();
+      if (!session?.access_token) {
+        msg.className = "err";
+        msg.textContent = "No valid reset session. Click “Load password reset” first or request a new link below.";
+        showResend();
+        return;
+      }
+
+      const pw = $("#pw").value.trim();
+      const p2 = $("#pw2").value.trim();
+      if (pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
+      if (pw !== p2)     { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
+
+      const { error } = await client.auth.updateUser({ password: pw });
+      if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
+
+      await client.auth.signOut();
+      msg.className = "ok";
+      msg.textContent = "Saved. You can close this tab and sign in with your new password.";
+    }
+
+    // ---- Fallback: resend a fresh link (still useful for Gmail, etc.) ----
+    async function resend() {
+      const out = $("#resendMsg");
+      const email = $("#email").value.trim();
+      if (!email) { out.className = "err"; out.textContent = "Enter your email address."; return; }
+      out.className = "muted"; out.textContent = "Sending…";
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: REDIRECT_URL });
+      if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
+      out.className = "ok"; out.textContent = "Sent. Check your inbox for a fresh link.";
+    }
   </script>
 </body>
 </html>
