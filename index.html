@@ -2,50 +2,26 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Account Setup / Reset</title>
+  <title>Set Your Password</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; }
     .card { max-width: 520px; padding: 1.25rem; border: 1px solid #e5e7eb; border-radius: 12px; }
-    input, select, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; }
+    input, button { width: 100%; padding: .7rem; margin: .35rem 0; box-sizing: border-box; }
     label { font-size: .95rem; font-weight: 600; margin-top: .25rem; display: block; }
     .row { display: flex; align-items: center; gap: .5rem; }
     .ok { color: #16a34a; margin-top: .4rem; }
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
-
-    /* Hide Secret Q/A by default; JS will show it when appropriate */
-    #qa_section { display: none; }
   </style>
 </head>
 <body>
-  <h2 id="title">Finish account setup</h2>
+  <h2 id="title">Set your password</h2>
   <div class="card">
-    <div class="muted" id="intro">Select a secret question and set a new password.</div>
+    <div class="muted" id="intro">Enter and confirm your new password (minimum 6 characters).</div>
 
-    <!-- Secret Q/A (shown only for first-time setup) -->
-    <div id="qa_section">
-      <label for="question">Secret question</label>
-      <select id="question">
-        <option>What is your pet's name?</option>
-        <option>What is your mother's maiden name?</option>
-        <option>What is your favorite color?</option>
-        <option>What was the name of your first school?</option>
-        <option>In what city were you born?</option>
-        <option>What was the model of your first car?</option>
-        <option>What is your favorite movie?</option>
-      </select>
-
-      <label for="answer">Secret answer</label>
-      <div class="row">
-        <input id="answer" type="password" placeholder="Your answer" />
-        <input id="showAnswer" type="checkbox" />
-        <span class="small">Show</span>
-      </div>
-    </div>
-
-    <label for="pw">New password <span class="small">(minimum 6 characters)</span></label>
+    <label for="pw">New password <span class="small">(min 6)</span></label>
     <div class="row">
       <input id="pw" type="password" placeholder="New password" />
       <input id="showPw" type="checkbox" />
@@ -65,57 +41,40 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    // ---- REPLACE WITH YOUR PROJECT VALUES ----
+    // -- YOUR PROJECT VALUES --
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds"
-;
-    // ------------------------------------------
+    const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+    // -------------------------
 
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  
+
     function parseHash() {
       const h = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
       const p = new URLSearchParams(h);
-      return {
-        access_token: p.get("access_token"),
-        refresh_token: p.get("refresh_token"),
-        type: (p.get("type") || "").toLowerCase()  // 'signup' | 'invite' | 'magiclink' | 'recovery' | ...
-      };
+      return { access_token: p.get("access_token"), refresh_token: p.get("refresh_token") };
     }
-  
-    // IMPORTANT: require tokens in URL; do NOT reuse any existing session
+
+    // Require tokens in the link; do NOT reuse any existing session
     async function requireSessionFromLink() {
       const { access_token, refresh_token } = parseHash();
-      if (!access_token || !refresh_token) {
-        return { ok: false, error: new Error("No tokens in link") };
-      }
+      if (!access_token || !refresh_token) return { ok:false, error:new Error("No tokens in link") };
       const { error } = await client.auth.setSession({ access_token, refresh_token });
-      if (error) return { ok:false, error };
-      return { ok:true };
+      return error ? { ok:false, error } : { ok:true };
     }
-  
-    async function sha256Hex(text) {
-      const enc = new TextEncoder().encode(text);
-      const buf = await crypto.subtle.digest("SHA-256", enc);
-      return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
-    }
-  
+
     function bindShow(idInput, idCheck) {
-      const el  = document.getElementById(idInput);
+      const el = document.getElementById(idInput);
       const box = document.getElementById(idCheck);
       if (el && box) box.onchange = (e)=> el.type = e.target.checked ? "text" : "password";
     }
-  
+
     async function main() {
-      bindShow("answer","showAnswer");
       bindShow("pw","showPw");
       bindShow("pw2","showPw2");
-  
+
       const msg   = document.getElementById("msg");
       const apply = document.getElementById("apply");
-      const qa    = document.getElementById("qa_section");
-  
-      // 1) Require a valid link (no fallback to old session)
+
       const sess = await requireSessionFromLink();
       if (!sess.ok) {
         msg.className = "err";
@@ -123,104 +82,26 @@
         apply.disabled = true;
         return;
       }
-  
-      const { data: { session } } = await client.auth.getSession();
-      const userId = session.user.id;
-  
-      const { type } = parseHash();
-      console.log("[RESET PAGE] hash.type =", type || "(none)");
-  
-      // 2) Read profile and decide if the user still needs setup
-      let needsSetup = false;
-      try {
-        const prof = await client
-          .from("user_profile")
-          .select('"Secret Answer", initial_login')
-          .eq("user_id", userId)
-          .single();
-  
-        console.log("[RESET PAGE] profile result:", prof);
-  
-        if (!prof.error) {
-          const ans  = (prof.data && (prof.data["Secret Answer"] || "")).trim();
-          const init = (prof.data && (prof.data.initial_login || "")).toLowerCase();
-          needsSetup = (!ans || init === "no");
-        } else {
-          // if profile read fails, assume first-time (show Q/A) to be safe
-          needsSetup = true;
-        }
-      } catch (e) {
-        console.log("[RESET PAGE] profile read failed:", e);
-        needsSetup = true;
-      }
-  
-      // 3) Determine Q/A visibility
-      // Always hide for password reset; otherwise show if setup link or profile says still needed
-      const isReset = (type === "recovery");
-      const isSetupLink = (type === "signup" || type === "invite" || type === "magiclink");
-      
-      // needsSetup takes precedence
-      const showQA = needsSetup ? true : (isReset ? false : isSetupLink);
-      
-      console.log("[RESET PAGE] showQA =", showQA, " (isReset=",isReset,", isSetupLink=",isSetupLink,", needsSetup=",needsSetup,")");
-      
-      if (showQA) {
-        document.getElementById("title").textContent = "Finish account setup";
-        document.getElementById("intro").textContent = "Select a secret question and set a new password.";
-        qa.style.display = "";
-      } else {
-        document.getElementById("title").textContent = "Reset your password";
-        document.getElementById("intro").textContent = "Enter and confirm your new password.";
-        qa.style.display = "none";
-      }
-  
-      // 4) Save
+
       apply.onclick = async () => {
         msg.className = "muted";
         msg.textContent = "Saving…";
-  
+
         const pw  = document.getElementById("pw").value.trim();
         const p2  = document.getElementById("pw2").value.trim();
-  
-        if (!pw || pw.length < 6) {
-          msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return;
-        }
-        if (pw !== p2) {
-          msg.className = "err"; msg.textContent = "Passwords do not match."; return;
-        }
-  
-        // Update Auth password
-        const { error: pwErr } = await client.auth.updateUser({ password: pw });
-        if (pwErr) { msg.className = "err"; msg.textContent = "Auth error: " + pwErr.message; return; }
-  
-        // Save Secret Q/A only if we showed the section
-        if (showQA) {
-          const q = document.getElementById("question").value;
-          const a = document.getElementById("answer").value.trim();
-          if (!a) { msg.className = "err"; msg.textContent = "Please enter your secret answer."; return; }
-          try {
-            const hashed = await sha256Hex(a);
-            const upd = await client.from("user_profile")
-              .update({ "Secret Question": q, "Secret Answer": hashed, "initial_login": "Yes" })
-              .eq("user_id", userId);
-            if (upd.error) throw upd.error;
-          } catch (e) {
-            msg.className = "err";
-            msg.textContent = "Profile update error: " + (e.message || e);
-            return;
-          }
-        }
-  
+
+        if (!pw || pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
+        if (pw !== p2)           { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
+
+        const { error } = await client.auth.updateUser({ password: pw });
+        if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
+
         msg.className = "ok";
         msg.textContent = "Saved. You can close this tab and sign in with your new password.";
       };
     }
-  
+
     main();
   </script>
 </body>
 </html>
-
-
-
-
