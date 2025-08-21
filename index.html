@@ -114,27 +114,29 @@
       const email = $("#vEmail").value.trim().toLowerCase();
       const code  = $("#vCode").value.trim();
       const out   = $("#verifyMsg");
-
+    
       if (!email) { out.className = "err"; out.textContent = "Enter your email."; return; }
       if (!code || code.length < 6) { out.className = "err"; out.textContent = "Enter the 6-digit code."; return; }
-
+    
       out.className = "muted"; out.textContent = "Verifying…";
-      console.debug('verifying with', { email, code });
-
-      // Creates a session when successful (type 'recovery')
-      const { error } = await client.auth.verifyOtp({ email, token: code, type: 'recovery' });
+    
+      // Try confirmation first (signup), then reset (recovery)
+      let { error } = await client.auth.verifyOtp({ email, token: code, type: 'signup' });
+      if (error) {
+        ({ error } = await client.auth.verifyOtp({ email, token: code, type: 'recovery' }));
+      }
       if (error) {
         out.className = "err";
         out.textContent = "Verification failed: " + error.message;
         enablePw(false);
         return;
       }
-
+    
       out.className = "ok";
       out.textContent = "Code verified. You can set a new password below.";
       $("#intro").textContent = `Set a new password for ${email}`;
       enablePw(true);
-
+    
       // Clean URL
       try {
         const clean = new URL(window.location.href);
@@ -142,6 +144,7 @@
         history.replaceState({}, "", clean.toString());
       } catch {}
     }
+    
 
     async function updatePassword() {
       const msg = $("#msg");
@@ -181,3 +184,4 @@
   </script>
 </body>
 </html>
+
