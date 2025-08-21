@@ -16,7 +16,6 @@
     .err { color: #dc2626; margin-top: .4rem; }
     .muted { color: #6b7280; font-size: .9rem; margin-top: .4rem; }
     .small { font-size: .85rem; color: #6b7280; }
-    .hidden { display: none; }
     button[disabled] { opacity: .6; cursor: not-allowed; }
     hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
   </style>
@@ -75,7 +74,13 @@
 
     const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
 
-    const $ = (id) => document.getElementById(id);
+    // ✅ Robust helper: accepts "id" or "#id" / ".class"
+    function $(q) {
+      if (!q) return null;
+      if (q[0] === '#' || q[0] === '.') return document.querySelector(q);
+      return document.getElementById(q) || document.querySelector('#' + q);
+    }
+
     function bindShow(inputId, checkId) {
       const el = $(inputId), box = $(checkId);
       if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
@@ -86,21 +91,24 @@
       $("#apply").disabled = !on;
     }
 
-    // small helpers: read URL params to prefill (optional)
+    // Prefill from URL (optional)
     const url = new URL(window.location.href);
     const qp  = (k) => url.searchParams.get(k);
     if (qp("email")) $("#vEmail").value = qp("email");
     if (qp("code"))  $("#vCode").value  = qp("code");
 
-    // show script errors inline
-    window.addEventListener("error",   (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + e.message; });
+    // Show script errors inline
+    window.addEventListener("error", (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + e.message; });
     window.addEventListener("unhandledrejection", (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + (e.reason?.message || e.reason); });
 
-    // wire UI
+    // Wire UI
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
     $("#verifyBtn").onclick = verifyCode;
     $("#apply").onclick = updatePassword;
     $("#send").onclick  = resend;
+
+    console.debug('hooked verify?', !!$("#verifyBtn"));
+    console.debug('hooked save?', !!$("#apply"));
 
     async function verifyCode() {
       const email = $("#vEmail").value.trim().toLowerCase();
@@ -111,10 +119,10 @@
       if (!code || code.length < 6) { out.className = "err"; out.textContent = "Enter the 6-digit code."; return; }
 
       out.className = "muted"; out.textContent = "Verifying…";
+      console.debug('verifying with', { email, code });
 
-      // 👉 This creates a session when successful (type 'recovery')
+      // Creates a session when successful (type 'recovery')
       const { error } = await client.auth.verifyOtp({ email, token: code, type: 'recovery' });
-      // Docs: https://supabase.com/docs/reference/javascript/auth-verifyotp
       if (error) {
         out.className = "err";
         out.textContent = "Verification failed: " + error.message;
@@ -127,7 +135,7 @@
       $("#intro").textContent = `Set a new password for ${email}`;
       enablePw(true);
 
-      // clean up any code/email in the URL bar
+      // Clean URL
       try {
         const clean = new URL(window.location.href);
         clean.searchParams.delete("code"); clean.searchParams.delete("email");
