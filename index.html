@@ -71,10 +71,16 @@
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  
+
     const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
-  
-    const $ = (id) => document.getElementById(id);
+
+    // ✅ Robust helper: accepts "id" or "#id" / ".class"
+    function $(q) {
+      if (!q) return null;
+      if (q[0] === '#' || q[0] === '.') return document.querySelector(q);
+      return document.getElementById(q) || document.querySelector('#' + q);
+    }
+
     function bindShow(inputId, checkId) {
       const el = $(inputId), box = $(checkId);
       if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
@@ -84,71 +90,63 @@
       $("#pw2").disabled = !on;
       $("#apply").disabled = !on;
     }
-  
-    // URL helpers + flow type
+
+    // Prefill from URL (optional)
     const url = new URL(window.location.href);
     const qp  = (k) => url.searchParams.get(k);
     if (qp("email")) $("#vEmail").value = qp("email");
     if (qp("code"))  $("#vCode").value  = qp("code");
-  
-    // Map/guard type
-    let rawType = (qp("type") || "").toLowerCase();
-    if (rawType === "invite" || rawType === "invitation") rawType = "signup";
-    const allowed = new Set(["signup","recovery","email_change"]);
-    const otpType = allowed.has(rawType) ? rawType : "recovery";
-  
-    // show script errors inline
+
+    // Show script errors inline
     window.addEventListener("error", (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + e.message; });
     window.addEventListener("unhandledrejection", (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + (e.reason?.message || e.reason); });
-  
-    // wire UI
+
+    // Wire UI
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
     $("#verifyBtn").onclick = verifyCode;
     $("#apply").onclick = updatePassword;
     $("#send").onclick  = resend;
-  
+
+    console.debug('hooked verify?', !!$("#verifyBtn"));
+    console.debug('hooked save?', !!$("#apply"));
+
     async function verifyCode() {
       const email = $("#vEmail").value.trim().toLowerCase();
       const code  = $("#vCode").value.trim();
       const out   = $("#verifyMsg");
-  
+
       if (!email) { out.className = "err"; out.textContent = "Enter your email."; return; }
       if (!code || code.length < 6) { out.className = "err"; out.textContent = "Enter the 6-digit code."; return; }
-  
+
       out.className = "muted"; out.textContent = "Verifying…";
-  
-      // Try the declared flow first (signup for new users, recovery for resets)
-      let { error } = await client.auth.verifyOtp({ email, token: code, type: otpType });
-  
-      // Seamless fallback if needed (helps if the email template and page type ever mismatch)
-      if (error && otpType !== "recovery") {
-        ({ error } = await client.auth.verifyOtp({ email, token: code, type: "recovery" }));
-      }
-  
+      console.debug('verifying with', { email, code });
+
+      // Creates a session when successful (type 'recovery')
+      const { error } = await client.auth.verifyOtp({ email, token: code, type: 'recovery' });
       if (error) {
         out.className = "err";
         out.textContent = "Verification failed: " + error.message;
         enablePw(false);
         return;
       }
-  
+
       out.className = "ok";
       out.textContent = "Code verified. You can set a new password below.";
       $("#intro").textContent = `Set a new password for ${email}`;
       enablePw(true);
-  
-      // clean up any code/email in the URL bar
+
+      // Clean URL
       try {
         const clean = new URL(window.location.href);
-        ["code","email"].forEach(k => clean.searchParams.delete(k));
+        clean.searchParams.delete("code"); clean.searchParams.delete("email");
         history.replaceState({}, "", clean.toString());
       } catch {}
     }
-  
+
     async function updatePassword() {
       const msg = $("#msg");
       msg.className = "muted"; msg.textContent = "Saving…";
-  
+
       const { data: { session } } = await client.auth.getSession();
       if (!session?.access_token) {
         msg.className = "err";
@@ -156,30 +154,27 @@
         enablePw(false);
         return;
       }
-  
+
       const pw = $("#pw").value.trim();
       const p2 = $("#pw2").value.trim();
       if (pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
       if (pw !== p2)     { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
-  
+
       const { error } = await client.auth.updateUser({ password: pw });
       if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
-  
+
       await client.auth.signOut();
       msg.className = "ok";
       msg.textContent = "Saved. You can close this tab and sign in with your new password.";
       enablePw(false);
     }
-  
-    // "Send code" – this sends a recovery code. It’s mainly for existing users.
-    // (If a brand-new user needs a new *signup* code, have them use the email’s "resend confirmation" link.)
+
     async function resend() {
       const out = $("#resendMsg");
       const email = $("#emailResend").value.trim();
       if (!email) { out.className = "err"; out.textContent = "Enter your email."; return; }
       out.className = "muted"; out.textContent = "Sending…";
-      const to = `${REDIRECT_URL}&email=${encodeURIComponent(email)}&type=recovery`;
-      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: to });
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: REDIRECT_URL });
       if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
       out.className = "ok"; out.textContent = "Code sent. Check your inbox for a 6-digit code.";
     }
