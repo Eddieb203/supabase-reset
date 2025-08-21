@@ -19,6 +19,7 @@
     .hidden { display: none; }
     button[disabled] { opacity: .6; cursor: not-allowed; }
     hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
+    .tip { font-size: .85rem; }
   </style>
 </head>
 <body>
@@ -31,7 +32,12 @@
       <hr />
       <p><strong>Step 1:</strong> Click to load your secure reset session.</p>
       <button id="loadReset">Load password reset</button>
-      <div id="loadMsg" class="muted"></div>
+      <div id="loadMsg" class="muted tip"></div>
+
+      <!-- Raw-link fallback if API is blocked -->
+      <div id="rawLinkBox" class="hidden tip">
+        Having trouble? Try <a id="rawLink" href="#" target="_blank" rel="noreferrer noopener">opening the original reset link</a>.
+      </div>
     </div>
 
     <hr />
@@ -52,7 +58,7 @@
     <button id="apply" disabled>Save</button>
     <div id="msg" class="muted"></div>
 
-    <!-- Resend box (fallback) -->
+    <!-- Resend box -->
     <div id="resend" class="hidden">
       <hr />
       <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
@@ -78,7 +84,14 @@
     }
     function showResend() { $("#resend").classList.remove("hidden"); }
     function showLoader() { $("#loaderBox").classList.remove("hidden"); }
+    function showRawLink(href) {
+      if (!href) return;
+      $("#rawLink").href = href;
+      $("#rawLinkBox").classList.remove("hidden");
+    }
+    function setSaveEnabled(on) { $("#apply").disabled = !on; }
 
+    // Unwrap common mail scanners (?url= / ?target= / ?u= / ?redirect=)
     function effectiveUrl() {
       const outer = new URL(window.location.href);
       const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
@@ -87,14 +100,13 @@
       catch { return outer; }
     }
     const eff  = effectiveUrl();
-    const hash = new URLSearchParams(eff.hash.startsWith("#") ? eff.hash.slice(1) : "");
+    const topHash = new URLSearchParams((eff.hash || "").replace(/^#/, ""));
     const qs   = eff.searchParams;
-    const qp   = (k) => hash.get(k) ?? qs.get(k);
+    const qp   = (k) => topHash.get(k) ?? qs.get(k);
 
-    // Show script errors inline
-    window.addEventListener("error", (e) => {
-      const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }
-    });
+    // Show JS errors instead of failing silently
+    window.addEventListener("error", (e) => { const m=$("#msg"); if(m){ m.className="err"; m.textContent="Error: " + e.message; }});
+    window.addEventListener("unhandledrejection", (e) => { const m=$("#msg"); if(m){ m.className="err"; m.textContent="Error: " + (e.reason?.message || e.reason || "Unhandled error"); }});
 
     // Wire UI
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
@@ -102,13 +114,17 @@
     $("#send").onclick  = resend;
     $("#loadReset").onclick = loadReset;
 
-    // Helper: enable/disable Save
-    function setSaveEnabled(on) {
-      $("#apply").disabled = !on;
+    // Helper: basic timeout wrapper
+    function withTimeout(promise, ms) {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Network timeout")), ms))
+      ]);
     }
 
-    // ----- boot: don't auto-consume; just decide what to show -----
+    // ----- boot -----
     (async function boot() {
+      // Explicit Supabase errors (e.g., otp_expired)
       const err  = qp("error") || qp("error_code");
       const desc = qp("error_description");
       if (err) {
@@ -117,19 +133,37 @@
         showResend();
       }
 
+      // If we have a confirmation_url, show loader and expose the raw link fallback
+      const confirmationURL = qp("confirmation_url");
       const haveResetInfo =
-        !!(qp("confirmation_url") || qp("code") || qp("token_hash") || qp("token"));
-      if (haveResetInfo) showLoader();
+        !!(confirmationURL || qp("code") || qp("token_hash") || qp("token"));
+      if (haveResetInfo) {
+        showLoader();
+        if (confirmationURL) showRawLink(confirmationURL);
+      }
 
-      // If a session already exists (e.g., user clicked "Load" already), enable Save
-      const { data: { session } } = await client.auth.getSession();
-      setSaveEnabled(!!session?.access_token);
+      // If Supabase already redirected back with tokens in the URL hash, create a session now
+      const at = qp("access_token");
+      const rt = qp("refresh_token");
+      if (at && rt) {
+        const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
+        if (!error) {
+          setSaveEnabled(true);
+          $("#msg").className = "ok";
+          $("#msg").textContent = "Reset session ready. You can set a new password below.";
+        }
+      }
 
-      const { data: { user } } = await client.auth.getUser();
+      // Personalize if session exists
+      const { data: { user, session } } = await client.auth.getSession().then(async (r) => {
+        if (!r?.data?.session) return { data: { user: (await client.auth.getUser()).data.user, session: null }};
+        return r;
+      });
       if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
+      setSaveEnabled(!!session?.access_token);
     })();
 
-    // ---- Step 1: User-initiated "load reset" (defanged) ----
+    // ---- Step 1: User-initiated "load reset" ----
     async function loadReset() {
       const btn = $("#loadReset");
       const loadMsg = $("#loadMsg");
@@ -141,6 +175,7 @@
       let tokenHash = qp("token_hash") || qp("token"); // support both names
       let type      = qp("type") || "recovery";
 
+      // Pull from confirmation_url if present
       const conf = qp("confirmation_url");
       if (conf) {
         try {
@@ -166,16 +201,21 @@
 
       try {
         if (code) {
-          const { error } = await client.auth.exchangeCodeForSession(code);
-          if (error) throw error;
+          // PKCE flow
+          await withTimeout(client.auth.exchangeCodeForSession(code), 12000);
         } else {
-          const { error } = await client.auth.verifyOtp({ token_hash: tokenHash, type: type || "recovery" });
-          if (error) throw error;
+          // Token-hash flow
+          await withTimeout(client.auth.verifyOtp({ token_hash: tokenHash, type: type || "recovery" }), 12000);
         }
       } catch (e) {
         loadMsg.className = "err";
-        loadMsg.textContent = "Auth error: " + e.message;
+        loadMsg.textContent = (e.message === "Network timeout")
+          ? "Network appears to be blocking the request. Use the link below (opens original Supabase link)."
+          : ("Auth error: " + e.message);
         showResend();
+        // If we have the original verify URL, show it as a fallback
+        const conf = qp("confirmation_url");
+        if (conf) showRawLink(conf);
         btn.disabled = false;
         return;
       }
@@ -189,7 +229,7 @@
       btn.disabled = false;
     }
 
-    // ---- Step 2: Update password (requires a valid session) ----
+    // ---- Step 2: Update password ----
     async function updatePassword() {
       const msg = $("#msg");
       msg.className = "muted";
@@ -222,7 +262,7 @@
       }
     }
 
-    // ---- Fallback: resend a fresh link ----
+    // ---- Resend a fresh link ----
     async function resend() {
       const out = $("#resendMsg");
       const email = $("#email").value.trim();
