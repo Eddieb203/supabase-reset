@@ -68,15 +68,15 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
   <script>
     // -- Your project values --
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
+  
     const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
-
+  
     const $ = (id) => document.getElementById(id);
     function bindShow(inputId, checkId) {
       const el = $(inputId), box = $(checkId);
@@ -84,47 +84,43 @@
     }
     function showResend() { $("#resend").classList.remove("hidden"); }
     function showLoader() { $("#loaderBox").classList.remove("hidden"); }
-    function showRawLink(href) {
-      if (!href) return;
-      $("#rawLink").href = href;
-      $("#rawLinkBox").classList.remove("hidden");
-    }
     function setSaveEnabled(on) { $("#apply").disabled = !on; }
-
-    // Unwrap common mail scanners (?url= / ?target= / ?u= / ?redirect=)
+  
+    // unwrap Outlook/Egress/etc. wrappers
     function effectiveUrl() {
       const outer = new URL(window.location.href);
       const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
                       outer.searchParams.get("u")   || outer.searchParams.get("redirect");
-      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; }
-      catch { return outer; }
+      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; } catch { return outer; }
     }
     const eff  = effectiveUrl();
-    const topHash = new URLSearchParams((eff.hash || "").replace(/^#/, ""));
+    const hash = new URLSearchParams(eff.hash.startsWith("#") ? eff.hash.slice(1) : "");
     const qs   = eff.searchParams;
-    const qp   = (k) => topHash.get(k) ?? qs.get(k);
-
-    // Show JS errors instead of failing silently
-    window.addEventListener("error", (e) => { const m=$("#msg"); if(m){ m.className="err"; m.textContent="Error: " + e.message; }});
-    window.addEventListener("unhandledrejection", (e) => { const m=$("#msg"); if(m){ m.className="err"; m.textContent="Error: " + (e.reason?.message || e.reason || "Unhandled error"); }});
-
-    // Wire UI
+    const qp   = (k) => hash.get(k) ?? qs.get(k);
+  
+    // show script errors inline
+    window.addEventListener("error", (e) => { const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }});
+    window.addEventListener("unhandledrejection", (e) => { const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + (e.reason?.message || e.reason || "Unknown"); }});
+  
+    // wire UI
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
     $("#apply").onclick = updatePassword;
     $("#send").onclick  = resend;
     $("#loadReset").onclick = loadReset;
-
-    // Helper: basic timeout wrapper
-    function withTimeout(promise, ms) {
-      return Promise.race([
-        promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Network timeout")), ms))
-      ]);
+  
+    // strip tokens from URL after we store the session
+    function stripTokensFromUrl() {
+      try {
+        const u = new URL(window.location.href);
+        // remove hash & sensitive params
+        u.hash = "";
+        ["access_token","refresh_token","code","error","error_code","error_description"].forEach(p => u.searchParams.delete(p));
+        history.replaceState({}, "", u.toString());
+      } catch {}
     }
-
-    // ----- boot -----
+  
     (async function boot() {
-      // Explicit Supabase errors (e.g., otp_expired)
+      // show errors appended by Supabase (e.g. otp_expired)
       const err  = qp("error") || qp("error_code");
       const desc = qp("error_description");
       if (err) {
@@ -132,137 +128,98 @@
         $("#msg").textContent = desc || "Email link is invalid or has expired.";
         showResend();
       }
-
-      // If we have a confirmation_url, show loader and expose the raw link fallback
-      const confirmationURL = qp("confirmation_url");
-      const haveResetInfo =
-        !!(confirmationURL || qp("code") || qp("token_hash") || qp("token"));
-      if (haveResetInfo) {
+  
+      // If the email contained the wrapped link, show the "Load" box
+      if (qp("confirmation_url") || qp("code") || qp("access_token") || qp("refresh_token")) {
         showLoader();
-        if (confirmationURL) showRawLink(confirmationURL);
       }
-
-      // If Supabase already redirected back with tokens in the URL hash, create a session now
+  
+      // 1) PKCE: code → session
+      const code = qp("code");
+      if (code) {
+        const { error } = await client.auth.exchangeCodeForSession(code);
+        if (!error) {
+          $("#loadMsg").className = "ok";
+          $("#loadMsg").textContent = "Reset session ready. You can set a new password below.";
+          setSaveEnabled(true);
+          stripTokensFromUrl();
+        } else {
+          $("#loadMsg").className = "err";
+          $("#loadMsg").textContent = "Auth error: " + error.message;
+          showResend();
+        }
+      }
+  
+      // 2) Legacy: access_token/refresh_token → session
       const at = qp("access_token");
       const rt = qp("refresh_token");
       if (at && rt) {
         const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
         if (!error) {
+          $("#loadMsg").className = "ok";
+          $("#loadMsg").textContent = "Reset session ready. You can set a new password below.";
           setSaveEnabled(true);
-          $("#msg").className = "ok";
-          $("#msg").textContent = "Reset session ready. You can set a new password below.";
-        }
-      }
-
-      // Personalize if session exists
-      const { data: { user, session } } = await client.auth.getSession().then(async (r) => {
-        if (!r?.data?.session) return { data: { user: (await client.auth.getUser()).data.user, session: null }};
-        return r;
-      });
-      if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
-      setSaveEnabled(!!session?.access_token);
-    })();
-
-    // ---- Step 1: User-initiated "load reset" ----
-    async function loadReset() {
-      const btn = $("#loadReset");
-      const loadMsg = $("#loadMsg");
-      btn.disabled = true;
-      loadMsg.className = "muted";
-      loadMsg.textContent = "Preparing reset session…";
-
-      let code      = qp("code");
-      let tokenHash = qp("token_hash") || qp("token"); // support both names
-      let type      = qp("type") || "recovery";
-
-      // Pull from confirmation_url if present
-      const conf = qp("confirmation_url");
-      if (conf) {
-        try {
-          const u = new URL(conf);
-          code       = code      || u.searchParams.get("code");
-          tokenHash  = tokenHash || u.searchParams.get("token_hash") || u.searchParams.get("token");
-          type       =             u.searchParams.get("type") || type;
-        } catch {
-          loadMsg.className = "err";
-          loadMsg.textContent = "Malformed confirmation_url.";
-          btn.disabled = false;
-          return;
-        }
-      }
-
-      if (!code && !tokenHash) {
-        loadMsg.className = "err";
-        loadMsg.textContent = "Missing token. Open the newest email and try again.";
-        showResend();
-        btn.disabled = false;
-        return;
-      }
-
-      try {
-        if (code) {
-          // PKCE flow
-          await withTimeout(client.auth.exchangeCodeForSession(code), 12000);
+          stripTokensFromUrl();
         } else {
-          // Token-hash flow
-          await withTimeout(client.auth.verifyOtp({ token_hash: tokenHash, type: type || "recovery" }), 12000);
+          $("#loadMsg").className = "err";
+          $("#loadMsg").textContent = "Auth error: " + error.message;
+          showResend();
         }
-      } catch (e) {
-        loadMsg.className = "err";
-        loadMsg.textContent = (e.message === "Network timeout")
-          ? "Network appears to be blocking the request. Use the link below (opens original Supabase link)."
-          : ("Auth error: " + e.message);
-        showResend();
-        // If we have the original verify URL, show it as a fallback
-        const conf = qp("confirmation_url");
-        if (conf) showRawLink(conf);
-        btn.disabled = false;
-        return;
       }
-
-      loadMsg.className = "ok";
-      loadMsg.textContent = "Reset session ready. You can set a new password below.";
-      setSaveEnabled(true);
-
+  
+      // personalize if possible
       const { data: { user } } = await client.auth.getUser();
       if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
-      btn.disabled = false;
+    })();
+  
+    // Step 1: user-initiated load → FOLLOW the real Supabase URL
+    function loadReset() {
+      const conf = qp("confirmation_url");
+      const loadMsg = $("#loadMsg");
+      if (!conf) {
+        loadMsg.className = "err";
+        loadMsg.textContent = "Missing confirmation_url. Open the newest email and try again.";
+        showResend();
+        return;
+      }
+      try {
+        // Navigate to Supabase verify; it will redirect back here with tokens/code.
+        window.location.replace(new URL(conf).toString());
+      } catch {
+        loadMsg.className = "err";
+        loadMsg.textContent = "Malformed confirmation_url.";
+      }
     }
-
-    // ---- Step 2: Update password ----
+  
+    // Step 2: update password (requires session)
     async function updatePassword() {
       const msg = $("#msg");
       msg.className = "muted";
       msg.textContent = "Saving…";
-
-      try {
-        const { data: { session } } = await client.auth.getSession();
-        if (!session?.access_token) {
-          msg.className = "err";
-          msg.textContent = "No valid reset session. Click “Load password reset” first, or request a new link below.";
-          showResend();
-          return;
-        }
-
-        const pw = $("#pw").value.trim();
-        const p2 = $("#pw2").value.trim();
-        if (pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
-        if (pw !== p2)     { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
-
-        const { error } = await client.auth.updateUser({ password: pw });
-        if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
-
-        await client.auth.signOut();
-        msg.className = "ok";
-        msg.textContent = "Saved. You can close this tab and sign in with your new password.";
-        setSaveEnabled(false);
-      } catch (e) {
+  
+      const { data: { session} } = await client.auth.getSession();
+      if (!session?.access_token) {
         msg.className = "err";
-        msg.textContent = "Unexpected error: " + (e?.message || e);
+        msg.textContent = "No valid reset session. Click “Load password reset” first, or request a new link below.";
+        showResend();
+        return;
       }
+  
+      const pw = $("#pw").value.trim();
+      const p2 = $("#pw2").value.trim();
+      if (pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
+      if (pw !== p2)     { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
+  
+      const { error } = await client.auth.updateUser({ password: pw });
+      if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
+  
+      await client.auth.signOut();
+      msg.className = "ok";
+      msg.textContent = "Saved. You can close this tab and sign in with your new password.";
+      setSaveEnabled(false);
     }
-
-    // ---- Resend a fresh link ----
+  
+    // resend a fresh link
     async function resend() {
       const out = $("#resendMsg");
       const email = $("#email").value.trim();
@@ -275,3 +232,4 @@
   </script>
 </body>
 </html>
+
