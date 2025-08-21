@@ -19,38 +19,36 @@
     .hidden { display: none; }
     button[disabled] { opacity: .6; cursor: not-allowed; }
     hr { border: 0; height: 1px; background: #e5e7eb; margin: 12px 0; }
-    .tip { font-size: .85rem; }
   </style>
 </head>
 <body>
   <h2 id="title">Set your password</h2>
   <div class="card">
-    <div class="muted" id="intro">Enter and confirm your new password (minimum 6 characters).</div>
+    <div class="muted" id="intro">Enter your email and the 6-digit code from the email, verify, then set a new password.</div>
 
-    <!-- Defanged loader -->
-    <div id="loaderBox" class="hidden">
-      <hr />
-      <p><strong>Step 1:</strong> Click to load your secure reset session.</p>
-      <button id="loadReset">Load password reset</button>
-      <div id="loadMsg" class="muted tip"></div>
+    <!-- Step 1: Verify email + code -->
+    <label for="vEmail">Email</label>
+    <input id="vEmail" type="email" placeholder="you@example.com" />
 
-      <!-- Raw-link fallback if API is blocked -->
-      <div id="rawLinkBox" class="hidden tip">
-        Having trouble? Try <a id="rawLink" href="#" target="_blank" rel="noreferrer noopener">opening the original reset link</a>.
-      </div>
-    </div>
+    <label for="vCode">6-digit code</label>
+    <input id="vCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" />
+
+    <button id="verifyBtn">Verify code</button>
+    <div id="verifyMsg" class="muted"></div>
 
     <hr />
+
+    <!-- Step 2: Set new password (disabled until verified) -->
     <label for="pw">New password <span class="small">(min 6)</span></label>
     <div class="row">
-      <input id="pw" type="password" placeholder="New password" />
+      <input id="pw" type="password" placeholder="New password" disabled />
       <input id="showPw" type="checkbox" />
       <span class="small">Show</span>
     </div>
 
     <label for="pw2">Confirm new password</label>
     <div class="row">
-      <input id="pw2" type="password" placeholder="Confirm new password" />
+      <input id="pw2" type="password" placeholder="Confirm new password" disabled />
       <input id="showPw2" type="checkbox" />
       <span class="small">Show</span>
     </div>
@@ -58,12 +56,12 @@
     <button id="apply" disabled>Save</button>
     <div id="msg" class="muted"></div>
 
-    <!-- Resend box -->
-    <div id="resend" class="hidden">
+    <!-- Resend code -->
+    <div id="resend">
       <hr />
-      <label for="email">Link expired? Enter your email to get a fresh reset link.</label>
-      <input id="email" type="email" placeholder="you@example.com" />
-      <button id="send">Send reset link</button>
+      <label for="emailResend">Need a new code? Enter your email:</label>
+      <input id="emailResend" type="email" placeholder="you@example.com" />
+      <button id="send">Send code</button>
       <div id="resendMsg" class="muted"></div>
     </div>
   </div>
@@ -74,162 +72,104 @@
     const SUPABASE_URL = "https://ezkgwezaflgkccdmuoqy.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6a2d3ZXphZmxna2NjZG11b3F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2MzA2MjQsImV4cCI6MjA2OTIwNjYyNH0.jzelEfBI9tegAjbcanZ7a5TRmSCOvxwHlnCJRlGRQds";
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  
+
     const REDIRECT_URL = window.location.origin + window.location.pathname + "?v=2";
-  
+
     const $ = (id) => document.getElementById(id);
     function bindShow(inputId, checkId) {
       const el = $(inputId), box = $(checkId);
       if (el && box) box.onchange = e => el.type = e.target.checked ? "text" : "password";
     }
-    function showResend() { $("#resend").classList.remove("hidden"); }
-    function showLoader() { $("#loaderBox").classList.remove("hidden"); }
-    function setSaveEnabled(on) { $("#apply").disabled = !on; }
-  
-    // unwrap Outlook/Egress/etc. wrappers
-    function effectiveUrl() {
-      const outer = new URL(window.location.href);
-      const wrapped = outer.searchParams.get("url") || outer.searchParams.get("target") ||
-                      outer.searchParams.get("u")   || outer.searchParams.get("redirect");
-      try { return wrapped ? new URL(decodeURIComponent(wrapped)) : outer; } catch { return outer; }
+    function enablePw(on) {
+      $("#pw").disabled  = !on;
+      $("#pw2").disabled = !on;
+      $("#apply").disabled = !on;
     }
-    const eff  = effectiveUrl();
-    const hash = new URLSearchParams(eff.hash.startsWith("#") ? eff.hash.slice(1) : "");
-    const qs   = eff.searchParams;
-    const qp   = (k) => hash.get(k) ?? qs.get(k);
-  
+
+    // small helpers: read URL params to prefill (optional)
+    const url = new URL(window.location.href);
+    const qp  = (k) => url.searchParams.get(k);
+    if (qp("email")) $("#vEmail").value = qp("email");
+    if (qp("code"))  $("#vCode").value  = qp("code");
+
     // show script errors inline
-    window.addEventListener("error", (e) => { const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + e.message; }});
-    window.addEventListener("unhandledrejection", (e) => { const m = $("#msg"); if (m) { m.className = "err"; m.textContent = "Error: " + (e.reason?.message || e.reason || "Unknown"); }});
-  
+    window.addEventListener("error",   (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + e.message; });
+    window.addEventListener("unhandledrejection", (e) => { $("#msg").className = "err"; $("#msg").textContent = "Error: " + (e.reason?.message || e.reason); });
+
     // wire UI
     bindShow("pw","showPw"); bindShow("pw2","showPw2");
+    $("#verifyBtn").onclick = verifyCode;
     $("#apply").onclick = updatePassword;
     $("#send").onclick  = resend;
-    $("#loadReset").onclick = loadReset;
-  
-    // strip tokens from URL after we store the session
-    function stripTokensFromUrl() {
+
+    async function verifyCode() {
+      const email = $("#vEmail").value.trim().toLowerCase();
+      const code  = $("#vCode").value.trim();
+      const out   = $("#verifyMsg");
+
+      if (!email) { out.className = "err"; out.textContent = "Enter your email."; return; }
+      if (!code || code.length < 6) { out.className = "err"; out.textContent = "Enter the 6-digit code."; return; }
+
+      out.className = "muted"; out.textContent = "Verifying…";
+
+      // 👉 This creates a session when successful (type 'recovery')
+      const { error } = await client.auth.verifyOtp({ email, token: code, type: 'recovery' });
+      // Docs: https://supabase.com/docs/reference/javascript/auth-verifyotp
+      if (error) {
+        out.className = "err";
+        out.textContent = "Verification failed: " + error.message;
+        enablePw(false);
+        return;
+      }
+
+      out.className = "ok";
+      out.textContent = "Code verified. You can set a new password below.";
+      $("#intro").textContent = `Set a new password for ${email}`;
+      enablePw(true);
+
+      // clean up any code/email in the URL bar
       try {
-        const u = new URL(window.location.href);
-        // remove hash & sensitive params
-        u.hash = "";
-        ["access_token","refresh_token","code","error","error_code","error_description"].forEach(p => u.searchParams.delete(p));
-        history.replaceState({}, "", u.toString());
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete("code"); clean.searchParams.delete("email");
+        history.replaceState({}, "", clean.toString());
       } catch {}
     }
-  
-    (async function boot() {
-      // show errors appended by Supabase (e.g. otp_expired)
-      const err  = qp("error") || qp("error_code");
-      const desc = qp("error_description");
-      if (err) {
-        $("#msg").className = "err";
-        $("#msg").textContent = desc || "Email link is invalid or has expired.";
-        showResend();
-      }
-  
-      // If the email contained the wrapped link, show the "Load" box
-      if (qp("confirmation_url") || qp("code") || qp("access_token") || qp("refresh_token")) {
-        showLoader();
-      }
-  
-      // 1) PKCE: code → session
-      const code = qp("code");
-      if (code) {
-        const { error } = await client.auth.exchangeCodeForSession(code);
-        if (!error) {
-          $("#loadMsg").className = "ok";
-          $("#loadMsg").textContent = "Reset session ready. You can set a new password below.";
-          setSaveEnabled(true);
-          stripTokensFromUrl();
-        } else {
-          $("#loadMsg").className = "err";
-          $("#loadMsg").textContent = "Auth error: " + error.message;
-          showResend();
-        }
-      }
-  
-      // 2) Legacy: access_token/refresh_token → session
-      const at = qp("access_token");
-      const rt = qp("refresh_token");
-      if (at && rt) {
-        const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
-        if (!error) {
-          $("#loadMsg").className = "ok";
-          $("#loadMsg").textContent = "Reset session ready. You can set a new password below.";
-          setSaveEnabled(true);
-          stripTokensFromUrl();
-        } else {
-          $("#loadMsg").className = "err";
-          $("#loadMsg").textContent = "Auth error: " + error.message;
-          showResend();
-        }
-      }
-  
-      // personalize if possible
-      const { data: { user } } = await client.auth.getUser();
-      if (user?.email) $("#intro").textContent = `Set a new password for ${user.email}`;
-    })();
-  
-    // Step 1: user-initiated load → FOLLOW the real Supabase URL
-    function loadReset() {
-      const conf = qp("confirmation_url");
-      const loadMsg = $("#loadMsg");
-      if (!conf) {
-        loadMsg.className = "err";
-        loadMsg.textContent = "Missing confirmation_url. Open the newest email and try again.";
-        showResend();
-        return;
-      }
-      try {
-        // Navigate to Supabase verify; it will redirect back here with tokens/code.
-        window.location.replace(new URL(conf).toString());
-      } catch {
-        loadMsg.className = "err";
-        loadMsg.textContent = "Malformed confirmation_url.";
-      }
-    }
-  
-    // Step 2: update password (requires session)
+
     async function updatePassword() {
       const msg = $("#msg");
-      msg.className = "muted";
-      msg.textContent = "Saving…";
-  
-      const { data: { session} } = await client.auth.getSession();
+      msg.className = "muted"; msg.textContent = "Saving…";
+
+      const { data: { session } } = await client.auth.getSession();
       if (!session?.access_token) {
         msg.className = "err";
-        msg.textContent = "No valid reset session. Click “Load password reset” first, or request a new link below.";
-        showResend();
+        msg.textContent = "No verified session. Verify your code first.";
+        enablePw(false);
         return;
       }
-  
+
       const pw = $("#pw").value.trim();
       const p2 = $("#pw2").value.trim();
       if (pw.length < 6) { msg.className = "err"; msg.textContent = "Password must be at least 6 characters."; return; }
       if (pw !== p2)     { msg.className = "err"; msg.textContent = "Passwords do not match."; return; }
-  
+
       const { error } = await client.auth.updateUser({ password: pw });
       if (error) { msg.className = "err"; msg.textContent = "Auth error: " + error.message; return; }
-  
+
       await client.auth.signOut();
       msg.className = "ok";
       msg.textContent = "Saved. You can close this tab and sign in with your new password.";
-      setSaveEnabled(false);
+      enablePw(false);
     }
-  
-    // resend a fresh link
+
     async function resend() {
       const out = $("#resendMsg");
-      const email = $("#email").value.trim();
-      if (!email) { out.className = "err"; out.textContent = "Enter your email address."; return; }
+      const email = $("#emailResend").value.trim();
+      if (!email) { out.className = "err"; out.textContent = "Enter your email."; return; }
       out.className = "muted"; out.textContent = "Sending…";
       const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: REDIRECT_URL });
       if (error) { out.className = "err"; out.textContent = "Error: " + error.message; return; }
-      out.className = "ok"; out.textContent = "Sent. Check your inbox for a fresh link.";
+      out.className = "ok"; out.textContent = "Code sent. Check your inbox for a 6-digit code.";
     }
   </script>
 </body>
 </html>
-
